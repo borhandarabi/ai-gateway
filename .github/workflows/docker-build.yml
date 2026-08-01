@@ -53,19 +53,6 @@ jobs:
       - name: Checkout (this repo -- Dockerfile / s6-rc.d / mihomo config only)
         uses: actions/checkout@v4
 
-      # OmniRoute no longer builds from source at all (see Dockerfile -- it's
-      # now a prebuilt base image), which removes the actual cause of the
-      # repeated "cannot allocate memory" failures. Keeping this swap step
-      # anyway as cheap insurance for the remaining Go/Node builds (grok2api,
-      # metacubexd, etc.) on constrained runners.
-      - name: Add swap space
-        run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
       - name: Set up QEMU (only if this platform needs emulation)
         if: matrix.qemu
         uses: docker/setup-qemu-action@v3
