@@ -39,7 +39,7 @@ RUN git clone --depth 1 --branch "${OMNIROUTE_REF}" "${OMNIROUTE_REPO_URL}" .
 ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
     OMNIROUTE_MITM_STUB=1 \
     OMNIROUTE_USE_TURBOPACK=1
-ARG OMNIROUTE_BUILD_MEMORY_MB=4096
+ARG OMNIROUTE_BUILD_MEMORY_MB=8192
 ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
 RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
     npm ci --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
