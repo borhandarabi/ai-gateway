@@ -118,6 +118,14 @@ FROM node:26-trixie-slim AS runtime
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG TARGETARCH
+
+RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates iptables iproute2 curl bash \
+    && rm -rf /var/lib/apt/lists/*
+
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/s6-noarch.tar.xz
 RUN set -eux; \
     case "${TARGETARCH}" in \
@@ -129,13 +137,6 @@ RUN set -eux; \
     tar -C / -Jxpf /tmp/s6-noarch.tar.xz; \
     tar -C / -Jxpf /tmp/s6-arch.tar.xz; \
     rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
-
-RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends \
-       ca-certificates iptables iproute2 curl bash \
-    && rm -rf /var/lib/apt/lists/*
 
 LABEL org.opencontainers.image.title="ai-gateway" \
       org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo/metacubexd + cloudflared, single image"
