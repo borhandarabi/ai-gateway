@@ -72,6 +72,10 @@ RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collec
 # main.go is the actual service entry point.
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
 
+RUN go run captcha.go --tokens 850 --batch 3 --parallel 3 --block-trackers true --no-tui true
+
+RUN cp tokens.sqlite /out/tokens.sqlite
+
 # ───────────────────────── metacubexd UI (static) ───────────────────────────
 FROM node:22-alpine AS metacubexd-ui
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH HUSKY=0
@@ -124,7 +128,7 @@ RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates iptables iproute2 curl bash \
+       ca-certificates iptables iproute2 curl bash xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/s6-noarch.tar.xz
@@ -152,6 +156,7 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
+COPY --from=glm-builder /out/tokens.sqlite /opt/glm/tokens.sqlite
 
 COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
 COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
