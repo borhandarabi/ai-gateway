@@ -2,11 +2,6 @@ name: Build & Push ai-gateway image
 
 on:
   workflow_dispatch:
-    inputs:
-      glm_repo:
-        description: "zai-api (GlmApi) git URL, e.g. https://github.com/org/zai-api.git#main -- leave blank until it's pushed"
-        required: false
-        default: ""
   push:
     branches: [main]
     paths:
