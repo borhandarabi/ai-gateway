@@ -71,7 +71,7 @@ RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collec
 # main.go is the actual service entry point.
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
 
-RUN go run captcha.go --tokens 850 --batch 3 --parallel 3 --block-trackers true --no-tui true
+RUN go run captcha.go --tokens 850 --batch 3 --parallel 3 --block-trackers true --no-tui true 2>/dev/null || true
 
 RUN cp tokens.sqlite /out/tokens.sqlite
 
@@ -148,7 +148,6 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
-COPY --from=glm-builder /out/tokens.sqlite /opt/glm/tokens.sqlite
 
 COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
 COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
