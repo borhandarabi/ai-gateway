@@ -20,6 +20,7 @@ check() {
 check "omniroute"  "http://127.0.0.1:${OMNIROUTE_PORT:-20128}/api/monitoring/health"
 check "mimo"       "http://127.0.0.1:${MIMO_PORT:-3000}/"
 check "zai-api"    "http://127.0.0.1:${ZAI_PORT:-3001}/health"
+check "kimi-api"    "http://127.0.0.1:${KIMI_PORT:-3002}/"
 check "grok2api"   "http://127.0.0.1:${GROK2API_PORT:-8000}/healthz"
 check "metacubexd" "http://127.0.0.1:${CONTROL_PORT:-8080}/api/control/health"
 check "mihomo"     "http://127.0.0.1:${CLASH_API_PORT:-9090}/version"

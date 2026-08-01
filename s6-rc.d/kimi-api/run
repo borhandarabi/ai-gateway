@@ -1,0 +1,10 @@
+#!/command/with-contenv bash
+set -e
+cd /opt/kimi
+export PORT="${KIMI_PORT:-3002}"
+export HOST="${BIND_ADDR:-0.0.0.0}"
+export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-Waguri}"
+
+# AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
+# this in production, do not rely on the default.
+exec ./kimi-api

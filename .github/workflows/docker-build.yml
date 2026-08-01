@@ -17,6 +17,7 @@ env:
   METACUBEXD_REPO: https://github.com/MetaCubeX/metacubexd.git#main
   GROK2API_REPO: https://github.com/i-panel/grok2api-go.git#main
   GLM_REPO: https://github.com/borhandarabi/GLM-Free-API.git#main
+  KIMI_REPO: https://github.com/borhandarabi/Kimi-API.git#main
   MIHOMO_VERSION: v1.19.27
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
   # from source. Pin to a specific tag instead of the floating latest-web
@@ -86,6 +87,7 @@ jobs:
             metacubexd_src=${{ env.METACUBEXD_REPO }}
             grok2api_src=${{ env.GROK2API_REPO }}
             glm_src=${{ env.GLM_REPO }}
+            kimi_src=${{ env.KIMI_REPO }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
@@ -141,10 +143,12 @@ jobs:
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "${{ steps.meta.outputs.json }}") \
-            $(printf "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s " *)
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$METADATA_JSON") \
+            $(printf "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s " /tmp/digests/*)
 
       - name: Inspect final image
         run: |

@@ -9,6 +9,12 @@ export AGENT_MODE="${ZAI_AGENT_MODE:-true}"
 export LOG_LEVEL="${ZAI_LOG_LEVEL:-info}"
 export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
 
+
+if [ ! -f /data/glm/tokens.sqlite ]; then
+    exec ./token-generator --tokens 750 --batch 3 --no-tui
+    cp -rf ./tokens.sqlite /data/glm/tokens.sqlite
+fi
+
 # AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
 # this in production, do not rely on the default.
 exec ./zai-api --agent-mode --db-path=/data/glm/tokens.sqlite

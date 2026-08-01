@@ -59,6 +59,17 @@ RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collec
 # main.go is the actual service entry point.
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
 
+# ─────────────────────────── Kimi-api (Go) ──────────────────────────
+FROM golang:1.26-alpine AS kimi-builder
+WORKDIR /src
+COPY --from=kimi_src . .
+RUN apk add --no-cache git gcc musl-dev
+RUN go mod init kimi-api
+# go.mod is pre-tidy as of writing; resolve real deps at build time.
+RUN go mod tidy
+# main.go is the actual service entry point.
+RUN go build -ldflags "-s -w" -trimpath -o /out/kimi-api main.go
+
 # ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
 FROM node:22-alpine AS grok2api-frontend-builder
 WORKDIR /src/frontend
@@ -191,7 +202,9 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
-COPY glm/tokens.sqlite /opt/glm/tokens.sqlite
+COPY glm/tokens.sqlite /data/glm/tokens.sqlite
+
+COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 
 COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
 COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
@@ -240,6 +253,9 @@ RUN mkdir -p /run/s6/container_environment \
 ENV OMNIROUTE_PORT=20128 \
     MIMO_PORT=3000 \
     GLM_PORT=3001 \
+    KIMI_PORT=3002 \
+    KIMI_ACCESS_TOKEN= \
+    KIMI_TOKEN=Waguri \
     GROK2API_PORT=8000 \
     CONTROL_PORT=8080 \
     CLASH_API_PORT=9090 \
@@ -252,7 +268,7 @@ ENV OMNIROUTE_PORT=20128 \
     DISABLE_TUN=false \
     TZ=Asia/Shanghai
 
-EXPOSE 20128 3000 3001 8000 8080 9090 7890
+EXPOSE 20128 3000 3001 3002 8000 8080 9090 7890
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
