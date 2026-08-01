@@ -65,6 +65,7 @@ ARG GLM_REF
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /src
 RUN git clone --depth 1 --branch "${GLM_REF}" "${GLM_REPO_URL}" .
+RUN go mod init zai-api
 RUN go mod tidy
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collector captcha.go
 # main.go is the actual service entry point.

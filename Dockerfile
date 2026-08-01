@@ -64,6 +64,7 @@ FROM golang:1.26-alpine AS glm-builder
 WORKDIR /src
 COPY --from=glm_src . .
 RUN apk add --no-cache git gcc musl-dev
+RUN go mod init zai-api
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
 RUN go mod tidy
 # captcha.go is build-only (compiled for availability, never auto-run).
