@@ -1,0 +1,14 @@
+#!/command/with-contenv bash
+set -e
+cd /opt/glm
+export PORT="${ZAI_PORT:-3001}"
+export HOST="${BIND_ADDR:-0.0.0.0}"
+export TIMEOUT="${ZAI_TIMEOUT:-300000}"
+export AUTH_TOKEN="${ZAI_AUTH_TOKEN:-Waguri}"
+export AGENT_MODE="${ZAI_AGENT_MODE:-true}"
+export LOG_LEVEL="${ZAI_LOG_LEVEL:-info}"
+export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
+
+# AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
+# this in production, do not rely on the default.
+exec ./zai-api --agent-mode --db-path=/data/glm/tokens.sqlite

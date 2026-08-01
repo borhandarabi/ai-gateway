@@ -1,0 +1,40 @@
+# Default seed config for mihomo. Copied to /data/mihomo/config.yaml on first
+# boot only (see s6-rc.d/mihomo/run) -- edit the copy under /data to persist
+# changes across image upgrades; this file is NOT re-applied once seeded.
+
+mixed-port: 7890
+external-controller: 0.0.0.0:9090
+secret: ""            # TODO: set a real secret for the control API in production
+
+tun:
+  enable: true
+  stack: system        # or "gvisor" / "mixed" depending on the mihomo version's support
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - "any:53"
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: fake-ip
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+
+# Providers/proxies go here -- placeholder, wire in real upstream proxies.
+proxies: []
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - DIRECT
+
+rules:
+  # cloudflared's own traffic must never be pulled into the TUN interface --
+  # keep this rule first, above everything else.
+  - PROCESS-NAME,cloudflared,DIRECT
+  # Loopback / inter-service localhost traffic should never re-enter TUN either.
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,::1/128,DIRECT
+  - MATCH,PROXY

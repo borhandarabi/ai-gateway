@@ -1,0 +1,19 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "railway/Dockerfile",
+    "watchPatterns": [
+      "railway/Dockerfile",
+      "s6-rc.d/**",
+      "mihomo/**",
+      "healthcheck.sh"
+    ]
+  },
+  "deploy": {
+    "healthcheckPath": "/api/monitoring/health",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5
+  }
+}

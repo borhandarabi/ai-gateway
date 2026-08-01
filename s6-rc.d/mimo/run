@@ -1,0 +1,15 @@
+#!/command/with-contenv bash
+set -e
+cd /opt/mimo
+mkdir -p /data/mimo
+# NOTE (open item): MimoApi's own source wasn't inspected for a HOST/bind-address
+# env var. If main.go hardcodes 0.0.0.0, TUNNEL_ONLY's 127.0.0.1 mode will not
+# actually apply to this service until that's confirmed/patched upstream.
+export PORT="${MIMO_PORT:-3000}"
+export HOST="${BIND_ADDR:-0.0.0.0}"
+export CORS_ORIGIN="${MIMO_CORS_ORIGIN:-*}"
+export SERVICE_TOKENS="${SERVICE_TOKENS}"
+export USER_IDS="${USER_IDS}"
+export XIAOMI_CHATBOT_PHS="${XIAOMI_CHATBOT_PHS}"
+
+exec ./mimoproxy

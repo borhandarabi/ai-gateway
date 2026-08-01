@@ -1,0 +1,48 @@
+services:
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        omniroute_src: ${OMNIROUTE_REPO:-https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50}
+        mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
+        metacubexd_src: ${METACUBEXD_REPO:-https://github.com/MetaCubeX/metacubexd.git#main}
+        glm_src: ${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
+      args:
+        MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
+    image: ai-gateway:local
+    container_name: ai-gateway
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    ports:
+      - "20128:20128"   # OmniRoute
+      - "3000:3000"     # MimoApi
+      - "3001:3001"     # zai-api / GlmApi
+      - "8080:8080"     # metacubexd control
+      - "9090:9090"     # mihomo Clash API
+      - "7890:7890"     # mihomo mixed-port (SOCKS/HTTP)
+    volumes:
+      - omniroute_data:/data/omniroute
+      - mimo_data:/data/mimo
+      - glm_data:/data/glm
+      - metacubexd_data:/data/metacubexd
+      - mihomo_data:/data/mihomo
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  omniroute_data:
+  mimo_data:
+  glm_data:
+  metacubexd_data:
+  mihomo_data:

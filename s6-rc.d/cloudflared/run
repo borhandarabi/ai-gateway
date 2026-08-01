@@ -1,0 +1,13 @@
+#!/command/with-contenv bash
+# cloudflared is always installed; it only actually tunnels if TUNNEL_TOKEN is set.
+# Must start before mihomo (mihomo depends on this) so its initial connection is
+# established before the TUN interface exists. As defense in depth (cloudflared
+# reconnects periodically), mihomo/config.yaml also carries a
+# PROCESS-NAME,cloudflared,DIRECT rule so its traffic is never captured by TUN.
+set -e
+if [ -z "${TUNNEL_TOKEN:-}" ]; then
+  echo "[cloudflared] TUNNEL_TOKEN not set -- service idle (no tunnel started)"
+  exec sleep infinity
+fi
+echo "[cloudflared] TUNNEL_TOKEN set -- starting tunnel"
+exec cloudflared tunnel run --token "${TUNNEL_TOKEN}"

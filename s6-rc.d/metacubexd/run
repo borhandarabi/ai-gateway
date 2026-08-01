@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+set -e
+cd /opt/metacubexd
+mkdir -p /data/metacubexd
+export NODE_ENV=production
+export UI_DIST=/opt/metacubexd/ui-dist
+export MIHOMO_BIN=/usr/local/bin/mihomo
+export DATA_DIR=/data/metacubexd
+export CONTROL_PORT="${CONTROL_PORT:-8080}"
+export HOST="${BIND_ADDR:-0.0.0.0}"
+# NOTE: metacubexd's own docker-entrypoint.sh normally also launches mihomo as
+# a child process. Here mihomo is already run as its own s6 service instead --
+# if the server's standalone output insists on spawning its own mihomo child,
+# set an env var (per upstream docs) to point it at the already-running kernel
+# instead of spawning a second instance.
+exec node /opt/metacubexd/server/index.mjs
