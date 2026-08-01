@@ -15,8 +15,10 @@
 
 ARG MIHOMO_VERSION=v1.19.27
 
-ARG OMNIROUTE_REPO_URL=https://github.com/diegosouzapw/OmniRoute.git
-ARG OMNIROUTE_REF=release/v3.8.50
+# OmniRoute is pulled as a prebuilt base image (see final stage below), not
+# built from source -- removes the memory-heavy Next.js build from this
+# pipeline entirely. Pin to a specific tag for reproducible builds.
+ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:latest-web
 ARG MIMO_REPO_URL=https://github.com/hooshidev3/mimo-ai-proxy.git
 ARG MIMO_REF=main
 ARG METACUBEXD_REPO_URL=https://github.com/MetaCubeX/metacubexd.git
@@ -25,30 +27,6 @@ ARG GROK2API_REPO_URL=https://github.com/i-panel/grok2api-go.git
 ARG GROK2API_REF=main
 ARG GLM_REPO_URL=https://github.com/borhandarabi/GLM-Free-API.git
 ARG GLM_REF=main
-
-# ─────────────────────────── OmniRoute (Node) ───────────────────────────────
-FROM node:26-trixie-slim AS omniroute-builder
-ARG OMNIROUTE_REPO_URL
-ARG OMNIROUTE_REF
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-      git python3 make g++ ca-certificates && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-RUN git clone --depth 1 --branch "${OMNIROUTE_REF}" "${OMNIROUTE_REPO_URL}" .
-ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
-    OMNIROUTE_MITM_STUB=1 \
-    OMNIROUTE_USE_TURBOPACK=1
-ARG OMNIROUTE_BUILD_MEMORY_MB=8192
-ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
-RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
-    && (cd node_modules/better-sqlite3 \
-        && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild) \
-    && node -e "require('better-sqlite3')(':memory:').close()" \
-    && (node node_modules/tls-client-node/scripts/postinstall.js || true)
-RUN --mount=type=cache,id=next-cache,target=/app/.build/next/cache \
-    mkdir -p /app/data && npm run build
 
 # ─────────────────────────── MimoApi (Go) ───────────────────────────────────
 FROM golang:1.26-alpine AS mimo-builder
@@ -144,7 +122,12 @@ RUN apk add --no-cache curl ca-certificates \
        -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared
 
 # ══════════════════════════ Final runtime image ═════════════════════════════
-FROM node:26-trixie-slim AS runtime
+# Base = the official OmniRoute image (see ARG OMNIROUTE_IMAGE above). Its
+# last USER layer is `node` -- override back to root for our own setup; s6's
+# /init needs root, each service that should run unprivileged drops to its
+# own user itself via su-exec inside its own s6 run script.
+FROM ${OMNIROUTE_IMAGE} AS runtime
+USER root
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG TARGETARCH
@@ -168,9 +151,7 @@ RUN set -eux; \
 LABEL org.opencontainers.image.title="ai-gateway (railway)" \
       org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo/metacubexd + cloudflared, single image, Railway-compatible build"
 
-COPY --from=omniroute-builder /app/.build/next/standalone /opt/omniroute
-COPY --from=omniroute-builder /app/node_modules/better-sqlite3 /opt/omniroute/node_modules/better-sqlite3
-COPY --from=omniroute-builder /app/scripts/dev/healthcheck.mjs /opt/omniroute/healthcheck.mjs
+# OmniRoute needs nothing here -- already baked into the base image at /app.
 
 COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
@@ -203,6 +184,7 @@ RUN groupadd -g 10001 grok2api \
     && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
 
 RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/metacubexd /data/mihomo \
+    && chown -R node:node /data/omniroute \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
     && cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.no-tun.yaml.default

@@ -2,6 +2,15 @@
 #
 # ai-gateway — single-image bundle of:
 #   - OmniRoute   (Node/Next.js)      : AI gateway / router UI + API
+#                                        -- uses the official published image
+#                                        (diegosouzapw/omniroute:latest-web) as
+#                                        the base of the final stage instead of
+#                                        building from source: it's multi-arch
+#                                        (amd64+arm64 confirmed), and it removes
+#                                        OmniRoute's memory-heavy Next.js/
+#                                        Turbopack build from our pipeline
+#                                        entirely (this was the repeated
+#                                        "cannot allocate memory" failure).
 #   - MimoApi     (Go)                : Mimo/Xiaomi provider proxy
 #   - zai-api     (Go, aka "GlmApi")  : Z.ai/GLM provider proxy
 #   - grok2api-go (Go + Node/Vite)    : Grok (xAI) provider proxy + dashboard
@@ -9,12 +18,12 @@
 #   - cloudflared (Go, prebuilt)      : optional Cloudflare Tunnel
 #
 # Each application stage below pulls its source from a *named build context*
-# pointing at the real upstream repo, so `docker build` always extracts the
-# current entrypoint/env/build-steps from the source of truth instead of a
-# locally vendored copy. Supply the contexts with `--build-context`, e.g.:
+# pointing at the real upstream repo (except OmniRoute -- see above), so
+# `docker build` always extracts the current entrypoint/env/build-steps from
+# the source of truth instead of a locally vendored copy. Supply the
+# contexts with `--build-context`, e.g.:
 #
 #   docker buildx build \
-#     --build-context omniroute_src=https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50 \
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
 #     --build-context metacubexd_src=https://github.com/MetaCubeX/metacubexd.git#main \
 #     --build-context grok2api_src=https://github.com/i-panel/grok2api-go.git#main \
@@ -28,31 +37,7 @@
 # so the image still builds for local testing.
 
 ARG MIHOMO_VERSION=v1.19.27
-
-# ─────────────────────────── OmniRoute (Node) ───────────────────────────────
-FROM node:26-trixie-slim AS omniroute-builder
-WORKDIR /app
-COPY --from=omniroute_src . .
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
-    OMNIROUTE_MITM_STUB=1 \
-    OMNIROUTE_USE_TURBOPACK=1
-ARG OMNIROUTE_BUILD_MEMORY_MB=8192
-ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_BUILD_MEMORY_MB}"
-RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
-    npm ci --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
-    && (cd node_modules/better-sqlite3 \
-        && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild) \
-    && node -e "require('better-sqlite3')(':memory:').close()" \
-    && (node node_modules/tls-client-node/scripts/postinstall.js || true)
-RUN --mount=type=cache,id=next-cache,target=/app/.build/next/cache \
-    mkdir -p /app/data && npm run build
-# Entry point extracted from the repo itself: dev/run-standalone.mjs
-
+ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:3.8.49-web
 # ─────────────────────────── MimoApi (Go) ───────────────────────────────────
 FROM golang:1.26-alpine AS mimo-builder
 WORKDIR /src
@@ -161,7 +146,15 @@ RUN apk add --no-cache curl ca-certificates \
     && chmod +x /usr/local/bin/cloudflared
 
 # ══════════════════════════ Final runtime image ═════════════════════════════
-FROM node:26-trixie-slim AS runtime
+# Base = the official OmniRoute image itself (see ARG OMNIROUTE_IMAGE above).
+# Its own last layers are `USER node` -- override back to root immediately so
+# our own RUN/COPY steps (s6-overlay, apt packages, other services' users)
+# work; s6's /init needs to run as root anyway (mihomo's TUN needs root/caps,
+# and each service that should run unprivileged -- grok2api, omniroute --
+# drops to its own user itself via su-exec inside its own s6 run script,
+# same pattern used throughout this image).
+FROM ${OMNIROUTE_IMAGE} AS runtime
+USER root
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG TARGETARCH
@@ -189,9 +182,9 @@ LABEL org.opencontainers.image.title="ai-gateway" \
       org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo/metacubexd + cloudflared, single image"
 
 # --- application artifacts ---
-COPY --from=omniroute-builder /app/.build/next/standalone /opt/omniroute
-COPY --from=omniroute-builder /app/node_modules/better-sqlite3 /opt/omniroute/node_modules/better-sqlite3
-COPY --from=omniroute-builder /app/scripts/dev/healthcheck.mjs /opt/omniroute/healthcheck.mjs
+# OmniRoute needs nothing here -- it's already fully baked into this base
+# image at /app (standalone Next.js build, better-sqlite3, healthcheck.mjs,
+# check-permissions.sh entrypoint), exactly as diegosouzapw published it.
 
 COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
@@ -235,6 +228,7 @@ RUN groupadd -g 10001 grok2api \
     && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
 
 RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/metacubexd /data/mihomo \
+    && chown -R node:node /data/omniroute \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
     && cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.no-tun.yaml.default
@@ -245,7 +239,7 @@ RUN mkdir -p /run/s6/container_environment \
 
 ENV OMNIROUTE_PORT=20128 \
     MIMO_PORT=3000 \
-    ZAI_PORT=3001 \
+    GLM_PORT=3001 \
     GROK2API_PORT=8000 \
     CONTROL_PORT=8080 \
     CLASH_API_PORT=9090 \

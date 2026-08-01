@@ -3,7 +3,11 @@
 Single Docker image running, as separate s6-supervised processes sharing one
 network namespace:
 
-- **OmniRoute** (Node/Next.js) — AI gateway/router, port `20128`
+- **OmniRoute** (Node/Next.js) — AI gateway/router, port `20128` -- pulled as
+  the official prebuilt image (`diegosouzapw/omniroute:latest-web`, confirmed
+  multi-arch amd64+arm64) and used as this image's base, rather than built
+  from source (removes its Next.js/Turbopack build from this pipeline
+  entirely -- see the OOM history below)
 - **MimoApi** (Go) — Mimo/Xiaomi provider proxy, port `3000`
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
 - **grok2api-go** (Go + Node/Vite) — Grok (xAI) provider proxy + dashboard, port `8000`
@@ -69,11 +73,12 @@ docker compose logs -f
 CI equivalent: `.github/workflows/docker-build.yml` -- builds `linux/amd64`
 and `linux/arm64` as **separate jobs** (native runners, no QEMU sharing a
 runner with the other arch's build), then merges them into one multi-arch
-manifest. This avoids the "cannot allocate memory" failure that a single
-combined `platforms: linux/amd64,linux/arm64` build hits on a normal-sized
-runner -- OmniRoute's Next.js build is memory-heavy on its own, and running
-it concurrently with a QEMU-emulated build of the whole stack for the other
-arch exhausts a ~7GB runner.
+manifest. This was originally needed to avoid a "cannot allocate memory"
+failure from a combined build, but since OmniRoute is now pulled as a
+prebuilt image (see above) instead of built from source, the actual cause of
+that OOM -- its Next.js/Turbopack build -- no longer runs in this pipeline
+at all. The per-arch job split and swap-space step are kept as cheap
+insurance for the remaining Go/Node builds.
 
 ## Open items (explicitly unresolved — do not treat as done)
 

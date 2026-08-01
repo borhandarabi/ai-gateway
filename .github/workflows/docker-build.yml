@@ -18,12 +18,15 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  OMNIROUTE_REPO: https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50
   MIMO_REPO: https://github.com/hooshidev3/mimo-ai-proxy.git#main
   METACUBEXD_REPO: https://github.com/MetaCubeX/metacubexd.git#main
   GROK2API_REPO: https://github.com/i-panel/grok2api-go.git#main
   GLM_REPO: https://github.com/borhandarabi/GLM-Free-API.git#main
   MIHOMO_VERSION: v1.19.27
+  # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
+  # from source. Pin to a specific tag instead of the floating latest-web
+  # once you've settled on a version, for reproducible builds.
+  OMNIROUTE_IMAGE: diegosouzapw/omniroute:latest-web
 
 jobs:
   build:
@@ -49,6 +52,19 @@ jobs:
     steps:
       - name: Checkout (this repo -- Dockerfile / s6-rc.d / mihomo config only)
         uses: actions/checkout@v4
+
+      # OmniRoute no longer builds from source at all (see Dockerfile -- it's
+      # now a prebuilt base image), which removes the actual cause of the
+      # repeated "cannot allocate memory" failures. Keeping this swap step
+      # anyway as cheap insurance for the remaining Go/Node builds (grok2api,
+      # metacubexd, etc.) on constrained runners.
+      - name: Add swap space
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Set up QEMU (only if this platform needs emulation)
         if: matrix.qemu
@@ -82,8 +98,8 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             MIHOMO_VERSION=${{ env.MIHOMO_VERSION }}
+            OMNIROUTE_IMAGE=${{ env.OMNIROUTE_IMAGE }}
           build-contexts: |
-            omniroute_src=${{ env.OMNIROUTE_REPO }}
             mimo_src=${{ env.MIMO_REPO }}
             metacubexd_src=${{ env.METACUBEXD_REPO }}
             grok2api_src=${{ env.GROK2API_REPO }}

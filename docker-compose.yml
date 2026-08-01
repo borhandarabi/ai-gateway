@@ -4,13 +4,13 @@ services:
       context: .
       dockerfile: Dockerfile
       additional_contexts:
-        omniroute_src: ${OMNIROUTE_REPO:-https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50}
         mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
         metacubexd_src: ${METACUBEXD_REPO:-https://github.com/MetaCubeX/metacubexd.git#main}
         grok2api_src: ${GROK2API_REPO:-https://github.com/i-panel/grok2api-go.git#main}
         glm_src: ${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
+        OMNIROUTE_IMAGE: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}
     image: ai-gateway:local
     container_name: ai-gateway
     restart: unless-stopped

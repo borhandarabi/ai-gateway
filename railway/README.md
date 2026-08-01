@@ -7,6 +7,16 @@ Railway-specific files:
   doesn't expose that flag
 - `mihomo/config.no-tun.yaml` — used automatically (see below)
 
+## 0. OmniRoute is a prebuilt image, not built from source
+
+Unlike the other services, OmniRoute comes from the official published
+image (`diegosouzapw/omniroute:latest-web`, confirmed multi-arch:
+amd64 + arm64) used as this Dockerfile's base, instead of `git clone` +
+`npm run build`. This removes OmniRoute's memory-heavy Next.js/Turbopack
+build from the pipeline entirely -- no `OMNIROUTE_REPO_URL`/`OMNIROUTE_REF`
+Variables needed for it, just `OMNIROUTE_IMAGE` if you want to pin a
+specific version tag instead of the floating `latest-web`.
+
 ## 1. TUN does not work on Railway — read this first
 
 Railway does not grant containers `CAP_NET_ADMIN`/`CAP_NET_RAW` or
@@ -27,8 +37,7 @@ Set these under the service's **Variables** tab:
 
 | Variable | Purpose | Default in Dockerfile if unset |
 |---|---|---|
-| `OMNIROUTE_REPO_URL` | OmniRoute git URL | `https://github.com/diegosouzapw/OmniRoute.git` |
-| `OMNIROUTE_REF` | branch/tag | `release/v3.8.50` |
+| `OMNIROUTE_IMAGE` | prebuilt OmniRoute image (not built from source -- see below) | `diegosouzapw/omniroute:3.8.49-web` |
 | `MIMO_REPO_URL` | MimoApi git URL | `https://github.com/hooshidev3/mimo-ai-proxy.git` |
 | `MIMO_REF` | branch/tag | `main` |
 | `METACUBEXD_REPO_URL` | metacubexd git URL | `https://github.com/MetaCubeX/metacubexd.git` |
