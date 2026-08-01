@@ -17,7 +17,7 @@ env:
   METACUBEXD_REPO: https://github.com/MetaCubeX/metacubexd.git#main
   GROK2API_REPO: https://github.com/i-panel/grok2api-go.git#main
   GLM_REPO: https://github.com/borhandarabi/GLM-Free-API.git#main
-  KIMI_REPO: https://github.com/borhandarabi/Kimi-API.git#main
+  KIMI_REPO: https://github.com/izaart95-jpg/KimiFreeAPI.git#main
   MIHOMO_VERSION: v1.19.27
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
   # from source. Pin to a specific tag instead of the floating latest-web

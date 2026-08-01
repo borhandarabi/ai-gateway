@@ -27,6 +27,8 @@ ARG GROK2API_REPO_URL=https://github.com/i-panel/grok2api-go.git
 ARG GROK2API_REF=main
 ARG GLM_REPO_URL=https://github.com/borhandarabi/GLM-Free-API.git
 ARG GLM_REF=main
+ARG KIMI_REPO_URL=https://github.com/izaart95-jpg/KimiFreeAPI.git
+ARG KIMI_REF=main
 
 # ─────────────────────────── MimoApi (Go) ───────────────────────────────────
 FROM golang:1.26-alpine AS mimo-builder

@@ -8,7 +8,7 @@ services:
         metacubexd_src: ${METACUBEXD_REPO:-https://github.com/MetaCubeX/metacubexd.git#main}
         grok2api_src: ${GROK2API_REPO:-https://github.com/i-panel/grok2api-go.git#main}
         glm_src: ${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
-        kimi_src: ${KIMI_REPO:-https://github.com/borhandarabi/KimiFreeAPI.git#main}
+        kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
         OMNIROUTE_IMAGE: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}
