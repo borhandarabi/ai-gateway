@@ -6,6 +6,7 @@ network namespace:
 - **OmniRoute** (Node/Next.js) — AI gateway/router, port `20128`
 - **MimoApi** (Go) — Mimo/Xiaomi provider proxy, port `3000`
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
+- **grok2api-go** (Go + Node/Vite) — Grok (xAI) provider proxy + dashboard, port `8000`
 - **metacubexd + mihomo** (Node + Go) — proxy dashboard/control (`8080`/`9090`)
   and proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`), both active
 - **cloudflared** (Go, prebuilt) — optional Cloudflare Tunnel, always
@@ -92,3 +93,15 @@ GHCR, same named-build-context wiring as `build.sh`).
    already-running kernel rather than spawning a second `mihomo` process.
 5. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
    empty; set a real one before exposing port `9090` anywhere non-trusted.
+6. **grok2api-go's `docker/entrypoint.sh` internals** — copied and run as-is
+   from upstream (real ENTRYPOINT extracted at build time, per the same
+   principle as the other services), but its exact logic wasn't inspected
+   line-by-line. It's assumed to prep `/app/data`-style paths as root, then
+   `su-exec` down to a non-root user before exec'ing the CMD args. Here it's
+   pointed at `/data/grok2api` instead of `/app/data` (namespaced like every
+   other service) and a `grok2api` user (UID 10001) is created for it to drop
+   into (`su-exec` itself is rebuilt natively for Debian/glibc, since
+   upstream's own image is Alpine and its `su-exec` binary wouldn't run on
+   this image's base). If the entrypoint hardcodes `/app/data` or
+   `/run/grok2api` instead of honoring env vars/CLI flags, this will need a
+   small adjustment once verified against the actual script.

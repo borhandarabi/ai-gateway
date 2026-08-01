@@ -1,0 +1,16 @@
+#!/command/with-contenv bash
+set -e
+mkdir -p /data/grok2api
+export TZ="${TZ:-Asia/Shanghai}"
+export GROK2API_CONFIG_SOURCE="${GROK2API_CONFIG_SOURCE:-/data/grok2api/config.yaml}"
+# NOTE (open item): the real docker/entrypoint.sh from the repo wasn't
+# inspected line-by-line -- it's copied and run as-is (upstream ENTRYPOINT),
+# and is assumed to: (a) chown/prepare data dirs as root, (b) su-exec down to
+# the `grok2api` user, (c) exec the CMD args given to it. If it hardcodes
+# paths like /app/data or /run/grok2api instead of respecting env vars, this
+# will need a small patch upstream or an override here.
+cd /opt/grok2api
+exec /usr/local/bin/grok2api-entrypoint \
+  /opt/grok2api/grok2api \
+  --config "/data/grok2api/config.yaml" \
+  --listen "${BIND_ADDR:-0.0.0.0}:${GROK2API_PORT:-8000}"

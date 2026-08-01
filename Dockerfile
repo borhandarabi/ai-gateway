@@ -4,6 +4,7 @@
 #   - OmniRoute   (Node/Next.js)      : AI gateway / router UI + API
 #   - MimoApi     (Go)                : Mimo/Xiaomi provider proxy
 #   - zai-api     (Go, aka "GlmApi")  : Z.ai/GLM provider proxy
+#   - grok2api-go (Go + Node/Vite)    : Grok (xAI) provider proxy + dashboard
 #   - mihomo + metacubexd (Go + Node) : proxy kernel + dashboard
 #   - cloudflared (Go, prebuilt)      : optional Cloudflare Tunnel
 #
@@ -16,6 +17,7 @@
 #     --build-context omniroute_src=https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50 \
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
 #     --build-context metacubexd_src=https://github.com/MetaCubeX/metacubexd.git#main \
+#     --build-context grok2api_src=https://github.com/i-panel/grok2api-go.git#main \
 #     --build-context glm_src=<GLM_REPO_URL>#<GLM_REF>   \
 #     -t ai-gateway:latest .
 #
@@ -72,9 +74,49 @@ RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collec
 # main.go is the actual service entry point.
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
 
-RUN go run captcha.go --tokens 850 --batch 3 --parallel 3 --block-trackers true --no-tui true 2>/dev/null || true
+# ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
+FROM node:22-alpine AS grok2api-frontend-builder
+WORKDIR /src/frontend
+RUN corepack enable
+COPY --from=grok2api_src frontend/package.json frontend/pnpm-lock.yaml ./
+RUN --mount=type=cache,id=grok2api-pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store && pnpm fetch --frozen-lockfile
+COPY --from=grok2api_src frontend/ ./
+RUN --mount=type=cache,id=grok2api-pnpm,target=/pnpm/store \
+    pnpm config set store-dir /pnpm/store \
+    && pnpm install --offline --frozen-lockfile \
+    && pnpm build
+# -> /src/frontend/dist
 
-RUN cp tokens.sqlite /out/tokens.sqlite
+# ───────────────────────── grok2api-go backend (Go) ─────────────────────────
+FROM golang:1.26-alpine AS grok2api-backend-builder
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src/backend
+RUN apk add --no-cache ca-certificates git
+COPY --from=grok2api_src backend/go.mod backend/go.sum ./
+RUN --mount=type=cache,id=grok2api-go-mod,target=/go/pkg/mod,sharing=locked \
+    go mod download
+COPY --from=grok2api_src backend/cmd ./cmd
+COPY --from=grok2api_src backend/internal ./internal
+COPY --from=grok2api_src backend/docs/docs.go ./docs/docs.go
+RUN --mount=type=cache,id=grok2api-go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=grok2api-go-build,target=/root/.cache/go-build,sharing=locked \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/grok2api ./cmd/grok2api
+# entrypoint extracted as-is from the repo: docker/entrypoint.sh (copied below)
+
+# ───── su-exec (native build on the SAME base as the final image) ──────────
+# grok2api-go's upstream image is Alpine and uses the Alpine `su-exec` package
+# to drop from root to its app user inside its own entrypoint.sh. Our final
+# image is Debian (node:26-trixie-slim) which has no such package, so we
+# build the same tiny, well-known su-exec (ncopa/su-exec) natively here
+# instead of trying to lift an Alpine/musl binary onto glibc.
+FROM node:26-trixie-slim AS su-exec-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 https://github.com/ncopa/su-exec.git . && make
 
 # ───────────────────────── metacubexd UI (static) ───────────────────────────
 FROM node:22-alpine AS metacubexd-ui
@@ -156,9 +198,18 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
+COPY glm/tokens.sqlite /opt/glm/tokens.sqlite
 
 COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
 COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
+
+COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
+COPY --from=grok2api-frontend-builder /src/frontend/dist /opt/grok2api/frontend/dist
+COPY --from=grok2api_src VERSION /opt/grok2api/VERSION
+# Real entrypoint from the repo, unmodified -- it drops from root to the
+# grok2api user via su-exec before exec'ing the CMD it's given.
+COPY --from=grok2api_src --chmod=0755 docker/entrypoint.sh /usr/local/bin/grok2api-entrypoint
+COPY --from=su-exec-builder /src/su-exec /usr/local/bin/su-exec
 
 COPY --from=mihomo-kernel /usr/local/bin/mihomo /usr/local/bin/mihomo
 COPY --from=cloudflared-fetch /usr/local/bin/cloudflared /usr/local/bin/cloudflared
@@ -177,7 +228,14 @@ COPY s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up 2>/dev/null || true
 
 # --- data dirs (namespaced per service to avoid collisions) ---
-RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/metacubexd /data/mihomo \
+# grok2api's own upstream image runs its process as a UID-10001 non-root
+# user (dropped to by its entrypoint via su-exec) -- replicate that user here
+# so the entrypoint's su-exec step has a real target to drop into.
+RUN groupadd -g 10001 grok2api \
+    && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
+
+RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/metacubexd /data/mihomo \
+    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
     && cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.no-tun.yaml.default
 
@@ -188,6 +246,7 @@ RUN mkdir -p /run/s6/container_environment \
 ENV OMNIROUTE_PORT=20128 \
     MIMO_PORT=3000 \
     ZAI_PORT=3001 \
+    GROK2API_PORT=8000 \
     CONTROL_PORT=8080 \
     CLASH_API_PORT=9090 \
     MIXED_PORT=7890 \
@@ -196,9 +255,10 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
     ZAI_LOG_FORMAT=text \
-    DISABLE_TUN=false
+    DISABLE_TUN=false \
+    TZ=Asia/Shanghai
 
-EXPOSE 20128 3000 3001 8080 9090 7890
+EXPOSE 20128 3000 3001 8000 8080 9090 7890
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]

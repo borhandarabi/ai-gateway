@@ -33,6 +33,8 @@ Set these under the service's **Variables** tab:
 | `MIMO_REF` | branch/tag | `main` |
 | `METACUBEXD_REPO_URL` | metacubexd git URL | `https://github.com/MetaCubeX/metacubexd.git` |
 | `METACUBEXD_REF` | branch/tag | `main` |
+| `GROK2API_REPO_URL` | grok2api-go git URL | `https://github.com/i-panel/grok2api-go.git` |
+| `GROK2API_REF` | branch/tag | `main` |
 | `GLM_REPO_URL` | zai-api git URL | **blank — build fails until set** (repo not pushed yet) |
 | `GLM_REF` | branch/tag | `main` |
 | `MIHOMO_VERSION` | mihomo release tag | `v1.19.27` |

@@ -21,6 +21,8 @@ ARG MIMO_REPO_URL=https://github.com/hooshidev3/mimo-ai-proxy.git
 ARG MIMO_REF=main
 ARG METACUBEXD_REPO_URL=https://github.com/MetaCubeX/metacubexd.git
 ARG METACUBEXD_REF=main
+ARG GROK2API_REPO_URL=https://github.com/i-panel/grok2api-go.git
+ARG GROK2API_REF=main
 ARG GLM_REPO_URL=https://github.com/borhandarabi/GLM-Free-API.git
 ARG GLM_REF=main
 
@@ -71,9 +73,6 @@ RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collec
 # main.go is the actual service entry point.
 RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
 
-RUN go run captcha.go --tokens 850 --batch 3 --parallel 3 --block-trackers true --no-tui true 2>/dev/null || true
-
-RUN cp tokens.sqlite /out/tokens.sqlite
 
 # ───────────────────────── metacubexd UI (static) ───────────────────────────
 FROM node:22-alpine AS metacubexd-ui
@@ -94,6 +93,36 @@ ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH HUSKY=0
 WORKDIR /repo
 RUN git clone --depth 1 --branch "${METACUBEXD_REF}" "${METACUBEXD_REPO_URL}" .
 RUN corepack enable && pnpm install --frozen-lockfile && pnpm --filter @metacubexd/server... build
+
+# ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
+FROM node:22-alpine AS grok2api-frontend-builder
+ARG GROK2API_REPO_URL
+ARG GROK2API_REF
+RUN apk add --no-cache git
+WORKDIR /src/frontend-repo
+RUN git clone --depth 1 --branch "${GROK2API_REF}" "${GROK2API_REPO_URL}" .
+WORKDIR /src/frontend-repo/frontend
+RUN corepack enable && pnpm install --frozen-lockfile && pnpm build
+
+# ───────────────────────── grok2api-go backend (Go) ─────────────────────────
+FROM golang:1.26-alpine AS grok2api-backend-builder
+ARG GROK2API_REPO_URL
+ARG GROK2API_REF
+ARG TARGETOS
+ARG TARGETARCH
+RUN apk add --no-cache ca-certificates git
+WORKDIR /src
+RUN git clone --depth 1 --branch "${GROK2API_REF}" "${GROK2API_REPO_URL}" .
+WORKDIR /src/backend
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/grok2api ./cmd/grok2api
+
+FROM node:26-trixie-slim AS su-exec-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git clone --depth 1 https://github.com/ncopa/su-exec.git . && make
 
 # ───────────────────────── mihomo kernel binary ─────────────────────────────
 FROM alpine:3.20 AS mihomo-kernel
@@ -148,9 +177,16 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
+COPY glm/tokens.sqlite /opt/glm/tokens.sqlite
 
 COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
 COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
+
+COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
+COPY --from=grok2api-frontend-builder /src/frontend-repo/frontend/dist /opt/grok2api/frontend/dist
+COPY --from=grok2api-backend-builder /src/VERSION /opt/grok2api/VERSION
+COPY --from=grok2api-backend-builder --chmod=0755 /src/docker/entrypoint.sh /usr/local/bin/grok2api-entrypoint
+COPY --from=su-exec-builder /src/su-exec /usr/local/bin/su-exec
 
 COPY --from=mihomo-kernel /usr/local/bin/mihomo /usr/local/bin/mihomo
 COPY --from=cloudflared-fetch /usr/local/bin/cloudflared /usr/local/bin/cloudflared
@@ -163,13 +199,18 @@ RUN chmod +x /usr/local/bin/healthcheck.sh
 COPY s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up 2>/dev/null || true
 
-RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/metacubexd /data/mihomo \
+RUN groupadd -g 10001 grok2api \
+    && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
+
+RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/metacubexd /data/mihomo \
+    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
     && cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.no-tun.yaml.default
 
 ENV OMNIROUTE_PORT=20128 \
     MIMO_PORT=3000 \
     GLM_PORT=3001 \
+    GROK2API_PORT=8000 \
     CONTROL_PORT=8080 \
     CLASH_API_PORT=9090 \
     MIXED_PORT=7890 \
@@ -178,9 +219,10 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
     ZAI_LOG_FORMAT=text \
-    DISABLE_TUN=true
+    DISABLE_TUN=true \
+    TZ=Asia/Shanghai
 
-EXPOSE 20128 3000 3001 8080 9090 7890
+EXPOSE 20128 3000 3001 8000 8080 9090 7890
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]

@@ -2,6 +2,11 @@ name: Build & Push ai-gateway image
 
 on:
   workflow_dispatch:
+    inputs:
+      glm_repo:
+        description: "zai-api (GlmApi) git URL, e.g. https://github.com/org/zai-api.git#main -- leave blank until it's pushed"
+        required: false
+        default: ""
   push:
     branches: [main]
     paths:
@@ -16,6 +21,7 @@ env:
   OMNIROUTE_REPO: https://github.com/diegosouzapw/OmniRoute.git#release/v3.8.50
   MIMO_REPO: https://github.com/hooshidev3/mimo-ai-proxy.git#main
   METACUBEXD_REPO: https://github.com/MetaCubeX/metacubexd.git#main
+  GROK2API_REPO: https://github.com/i-panel/grok2api-go.git#main
   GLM_REPO: https://github.com/borhandarabi/GLM-Free-API.git#main
   MIHOMO_VERSION: v1.19.27
 
@@ -69,6 +75,7 @@ jobs:
             omniroute_src=${{ env.OMNIROUTE_REPO }}
             mimo_src=${{ env.MIMO_REPO }}
             metacubexd_src=${{ env.METACUBEXD_REPO }}
+            grok2api_src=${{ env.GROK2API_REPO }}
             glm_src=${{ env.GLM_REPO }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
