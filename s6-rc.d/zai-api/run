@@ -1,7 +1,7 @@
 #!/command/with-contenv bash
 set -e
 cd /opt/glm
-export PORT="${ZAI_PORT:-3001}"
+export PORT="${GLM_PORT:-3001}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export TIMEOUT="${ZAI_TIMEOUT:-300000}"
 export AUTH_TOKEN="${ZAI_AUTH_TOKEN:-Waguri}"

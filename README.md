@@ -66,8 +66,14 @@ docker compose up -d
 docker compose logs -f
 ```
 
-CI equivalent: `.github/workflows/docker-build.yml` (multi-arch, pushes to
-GHCR, same named-build-context wiring as `build.sh`).
+CI equivalent: `.github/workflows/docker-build.yml` -- builds `linux/amd64`
+and `linux/arm64` as **separate jobs** (native runners, no QEMU sharing a
+runner with the other arch's build), then merges them into one multi-arch
+manifest. This avoids the "cannot allocate memory" failure that a single
+combined `platforms: linux/amd64,linux/arm64` build hits on a normal-sized
+runner -- OmniRoute's Next.js build is memory-heavy on its own, and running
+it concurrently with a QEMU-emulated build of the whole stack for the other
+arch exhausts a ~7GB runner.
 
 ## Open items (explicitly unresolved — do not treat as done)
 
