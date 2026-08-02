@@ -2,15 +2,25 @@
 set -e
 cd /opt/metacubexd
 mkdir -p /data/metacubexd
+
+# Seed mihomo config for metacubexd's spawned mihomo instance.
+# metacubexd spawns its own mihomo child process using this config.
+# The s6-managed mihomo service was removed to avoid port conflicts on 9090.
+if [ ! -f /data/metacubexd/config.yaml ]; then
+  if [ "${DISABLE_TUN:-false}" = "true" ]; then
+    echo "[metacubexd] Seeding no-TUN mihomo config"
+    cp /opt/mihomo-default-config.no-tun.yaml /data/metacubexd/config.yaml
+  else
+    echo "[metacubexd] Seeding default mihomo config (TUN + mixed-port)"
+    cp /opt/mihomo-default-config.yaml /data/metacubexd/config.yaml
+  fi
+fi
+
 export NODE_ENV=production
 export UI_DIST=/opt/metacubexd/ui-dist
 export MIHOMO_BIN=/usr/local/bin/mihomo
 export DATA_DIR=/data/metacubexd
 export CONTROL_PORT="${CONTROL_PORT:-8080}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
-# NOTE: metacubexd's own docker-entrypoint.sh normally also launches mihomo as
-# a child process. Here mihomo is already run as its own s6 service instead --
-# if the server's standalone output insists on spawning its own mihomo child,
-# set an env var (per upstream docs) to point it at the already-running kernel
-# instead of spawning a second instance.
+
 exec node /opt/metacubexd/server/index.mjs
