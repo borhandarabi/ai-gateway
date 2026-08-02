@@ -2,8 +2,15 @@ name: Build & Push ai-gateway image
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'تگ دلخواه ایمیج (اختیاری -- خالی بگذارید تا مثل قبل sha/latest ساخته شود)'
+        required: false
+        type: string
   push:
     branches: [main]
+    tags:
+      - '*'
     paths:
       - Dockerfile
       - s6-rc.d/**
@@ -22,7 +29,7 @@ env:
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
   # from source. Pin to a specific tag instead of the floating latest-web
   # once you've settled on a version, for reproducible builds.
-  OMNIROUTE_IMAGE: diegosouzapw/omniroute:latest-web
+  OMNIROUTE_IMAGE: diegosouzapw/omniroute:3.8.49-web
 
 jobs:
   build:
@@ -132,14 +139,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine custom tag (git tag push, or workflow_dispatch input)
+        id: tagcalc
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract metadata (real tags)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.tagcalc.outputs.tag }},enable=${{ steps.tagcalc.outputs.tag != '' }}
+            type=sha,format=long,enable=${{ steps.tagcalc.outputs.tag == '' }}
+            type=raw,value=latest,enable=${{ steps.tagcalc.outputs.tag == '' && github.ref == 'refs/heads/main' }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
