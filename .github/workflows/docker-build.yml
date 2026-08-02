@@ -37,17 +37,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux/amd64
-            runs-on: ubuntu-latest
-            qemu: false
           # GitHub-hosted arm64 runners avoid QEMU emulation entirely, which
           # is both faster and removes the emulation-overhead side of the
           # memory pressure. If your plan/org doesn't have these available,
           # switch runs-on back to ubuntu-latest and set qemu: true instead --
           # it'll still work, just slower and more memory-sensitive.
+          #
+          # "railway" variant bakes in DISABLE_TUN=true by default, for
+          # platforms (like Railway) that don't allow privileged/TUN access.
+          - platform: linux/amd64
+            runs-on: ubuntu-latest
+            qemu: false
+            variant: default
+            disable_tun: "false"
+          - platform: linux/amd64
+            runs-on: ubuntu-latest
+            qemu: false
+            variant: railway
+            disable_tun: "true"
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
             qemu: false
+            variant: default
+            disable_tun: "false"
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            qemu: false
+            variant: railway
+            disable_tun: "true"
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
@@ -89,6 +106,7 @@ jobs:
           build-args: |
             MIHOMO_VERSION=${{ env.MIHOMO_VERSION }}
             OMNIROUTE_IMAGE=${{ env.OMNIROUTE_IMAGE }}
+            DISABLE_TUN=${{ matrix.disable_tun }}
           build-contexts: |
             mimo_src=${{ env.MIMO_REPO }}
             metacubexd_src=${{ env.METACUBEXD_REPO }}
@@ -107,26 +125,31 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.variant }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   # Merges the amd64 + arm64 digests built above into one multi-arch manifest
-  # list under the real tags (sha + latest) -- this step needs no build
-  # resources itself, just registry API calls.
+  # list under the real tags (sha + latest, or the custom tag) -- run once per
+  # variant (default / railway), each producing its own manifest list. This
+  # step needs no build resources itself, just registry API calls.
   merge:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [default, railway]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digests-*
+          pattern: digests-*-${{ matrix.variant }}
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -155,6 +178,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # railway variant gets the same tag(s) as default, with -railway
+          # appended (to the custom tag, the sha tag, and to "latest" too).
+          flavor: |
+            suffix=${{ matrix.variant == 'railway' && '-railway' || '' }},onlatest=true
           tags: |
             type=raw,value=${{ steps.tagcalc.outputs.tag }},enable=${{ steps.tagcalc.outputs.tag != '' }}
             type=sha,format=long,enable=${{ steps.tagcalc.outputs.tag == '' }}

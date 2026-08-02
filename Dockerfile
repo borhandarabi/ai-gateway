@@ -169,6 +169,7 @@ USER root
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG TARGETARCH
+ARG DISABLE_TUN=false
 
 RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
@@ -265,8 +266,7 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
     ZAI_LOG_FORMAT=text \
-    DISABLE_TUN=false \
-    TZ=Asia/Shanghai
+    DISABLE_TUN=${DISABLE_TUN}
 
 EXPOSE 20128 3000 3001 3002 8000 8080 9090 7890
 
