@@ -148,7 +148,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$METADATA_JSON") \
-            $(printf "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s " /tmp/digests/*)
+            $(printf "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s " *)
 
       - name: Inspect final image
         run: |
