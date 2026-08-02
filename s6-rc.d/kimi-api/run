@@ -3,14 +3,14 @@ set -e
 cd /opt/kimi
 export PORT="${KIMI_PORT:-3002}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
-export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-${KIMI_TOKEN:-Waguri}}"
+export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-${KIMI_TOKEN:-}}"
 
-# Warn if using placeholder token
-if [ "${KIMI_ACCESS_TOKEN}" = "Waguri" ] || [ -z "${KIMI_ACCESS_TOKEN}" ]; then
-  echo "[kimi-api] WARNING: KIMI_ACCESS_TOKEN is not set or using placeholder."
-  echo "[kimi-api] Set a valid Kimi access token in your environment variables."
+# If no valid token is set, stay idle instead of crash-looping.
+# The service will start automatically once KIMI_ACCESS_TOKEN is provided.
+if [ -z "${KIMI_ACCESS_TOKEN}" ] || [ "${KIMI_ACCESS_TOKEN}" = "Waguri" ]; then
+  echo "[kimi-api] KIMI_ACCESS_TOKEN is not set or using placeholder -- staying idle."
+  echo "[kimi-api] Set a valid Kimi access token and restart the container to enable this service."
+  exec sleep infinity
 fi
 
-# AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
-# this in production, do not rely on the default.
 exec ./kimi-api
