@@ -10,6 +10,7 @@ network namespace:
   entirely -- see the OOM history below)
 - **MimoApi** (Go) — Mimo/Xiaomi provider proxy, port `3000`
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
+- **kimi-api** (Go) — kimi.com proxy, port `3002`
 - **grok2api-go** (Go + Node/Vite) — Grok (xAI) provider proxy + dashboard, port `8000`
 - **metacubexd + mihomo** (Node + Go) — proxy dashboard/control (`8080`/`9090`)
   and proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`), both active
@@ -39,6 +40,7 @@ cloudflared ─┐
              ├─▶ mihomo ─▶ mihomo-ready ─▶ omniroute
 network-mode-init ────────────────────────▶ mimo
                                            ▶ zai-api
+                                           ▶ kimi-api
                                            ▶ metacubexd
 ```
 
