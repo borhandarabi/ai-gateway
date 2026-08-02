@@ -3,7 +3,13 @@ set -e
 cd /opt/kimi
 export PORT="${KIMI_PORT:-3002}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
-export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-Waguri}"
+export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-${KIMI_TOKEN:-Waguri}}"
+
+# Warn if using placeholder token
+if [ "${KIMI_ACCESS_TOKEN}" = "Waguri" ] || [ -z "${KIMI_ACCESS_TOKEN}" ]; then
+  echo "[kimi-api] WARNING: KIMI_ACCESS_TOKEN is not set or using placeholder."
+  echo "[kimi-api] Set a valid Kimi access token in your environment variables."
+fi
 
 # AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
 # this in production, do not rely on the default.

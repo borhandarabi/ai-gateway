@@ -175,7 +175,7 @@ RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates iptables iproute2 curl bash xz-utils \
+       ca-certificates iptables iproute2 curl bash xz-utils musl \
     && rm -rf /var/lib/apt/lists/*
 
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/s6-noarch.tar.xz
@@ -232,7 +232,7 @@ COPY mihomo/config.no-tun.yaml /opt/mihomo-default-config.no-tun.yaml
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh
 COPY s6-rc.d/ /etc/s6-overlay/s6-rc.d/
-RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up 2>/dev/null || true
+RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/s6-overlay/s6-rc.d/*/run.sh 2>/dev/null || true
 
 # --- data dirs (namespaced per service to avoid collisions) ---
 # grok2api's own upstream image runs its process as a UID-10001 non-root

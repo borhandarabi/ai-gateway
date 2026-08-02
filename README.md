@@ -41,6 +41,7 @@ cloudflared ─┐
 network-mode-init ────────────────────────▶ mimo
                                            ▶ zai-api
                                            ▶ kimi-api
+                                           ▶ grok2api
                                            ▶ metacubexd
 ```
 
@@ -48,10 +49,29 @@ network-mode-init ────────────────────�
   order and by an explicit rule, since long-lived connections reconnect
   periodically and could otherwise get captured after TUN comes up).
 - `mihomo-ready` blocks until mihomo's control API responds, so the other
-  four services never race the TUN interface coming up.
+  services never race the TUN interface coming up.
 - `network-mode-init` computes `BIND_ADDR` (`0.0.0.0` normally, `127.0.0.1`
   when `TUNNEL_ONLY=true` + `TUNNEL_TOKEN` is set) and every app service reads
   it at startup.
+
+## s6-rc oneshot scripts (important!)
+
+The `network-mode-init` and `mihomo-ready` services are **oneshot** type in
+s6-rc. Their `up` files must be valid **execline** scripts (not bash with
+shebangs), because `s6-rc-compile` strips the shebang and parses the body as
+execline. The actual bash logic lives in a separate `run.sh` file, and the
+`up` file is a thin execline wrapper:
+
+```
+s6-rc.d/network-mode-init/up       → execline: with-contenv ./run.sh
+s6-rc.d/network-mode-init/run.sh   → bash: the actual logic
+s6-rc.d/mihomo-ready/up            → execline: with-contenv ./run.sh
+s6-rc.d/mihomo-ready/run.sh        → bash: the actual logic
+```
+
+**Do not** put `#!/command/with-contenv bash` in oneshot `up` files —
+`s6-rc-compile` will silently drop the service from the compiled database,
+causing all dependent services to never start.
 
 ## Deploying on Railway
 
@@ -65,7 +85,8 @@ mixed-port-only mode there via `DISABLE_TUN=true`.
 
 ```bash
 cp .env.example .env
-# edit .env -- at minimum set AUTH_TOKEN for zai-api
+# edit .env -- at minimum set ZAI_AUTH_TOKEN for zai-api
+# and KIMI_ACCESS_TOKEN for kimi-api (if using kimi-api)
 
 ./build.sh                 # or: docker compose build
 docker compose up -d
@@ -82,39 +103,60 @@ that OOM -- its Next.js/Turbopack build -- no longer runs in this pipeline
 at all. The per-arch job split and swap-space step are kept as cheap
 insurance for the remaining Go/Node builds.
 
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TUNNEL_TOKEN` | (empty) | Cloudflare Tunnel token. Leave empty to disable tunnel. |
+| `TUNNEL_ONLY` | `false` | When `true` + `TUNNEL_TOKEN` set, bind services to 127.0.0.1. |
+| `OMNIROUTE_PORT` | `20128` | OmniRoute port. |
+| `MIMO_PORT` | `3000` | MimoApi port. |
+| `KIMI_PORT` | `3002` | kimi-api port. |
+| `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_TOKEN`. |
+| `KIMI_TOKEN` | `Waguri` | Legacy fallback for Kimi token. |
+| `ZAI_PORT` | `3001` | zai-api port. |
+| `ZAI_AUTH_TOKEN` | `Waguri` | Auth token for zai-api. Change in production! |
+| `ZAI_AGENT_MODE` | `true` | Enable agent mode for zai-api. |
+| `GROK2API_PORT` | `8000` | grok2api port. |
+| `CONTROL_PORT` | `8080` | metacubexd dashboard port. |
+| `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
+| `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
+| `DISABLE_TUN` | `false` | Disable TUN mode (required on Railway). |
+
 ## Open items (explicitly unresolved — do not treat as done)
 
 1. **zai-api repo URL** — not pushed yet. `GLM_REPO` is blank/placeholder
    everywhere (`.env.example`, `docker-compose.yml`, the workflow's
    `workflow_dispatch` input / `GLM_REPO_URL` secret, `build.sh`). Until it
    exists, point `GLM_REPO` at a local checkout directory instead.
-2. **zai-api's SQLite driver** — `go.mod` was pre-`go mod tidy` when reviewed,
-   so it's unknown whether the driver needs CGO (`mattn/go-sqlite3`) or is
-   pure Go (`modernc.org/sqlite`). The `glm-builder` stage builds with
-   `CGO_ENABLED=1` + a static musl link as a safe default for either case --
-   re-check once `go mod tidy` has actually run against the real source.
-3. **MimoApi / metacubexd bind-address support** — `TUNNEL_ONLY` mode assumes
+2. **MimoApi / metacubexd bind-address support** — `TUNNEL_ONLY` mode assumes
    every service honors a `HOST`/bind-address env var. This is confirmed for
    OmniRoute (`HOSTNAME`) and zai-api (`HOST`), but MimoApi's and
    metacubexd's actual source weren't inspected for this — if either
    hardcodes `0.0.0.0`, `TUNNEL_ONLY` won't fully close it off and it'll need
    a small upstream patch or an iptables-level fallback.
-4. **metacubexd + mihomo double-spawn risk** — metacubexd's own
-   `docker-entrypoint.sh` normally spawns mihomo itself as a child process.
-   Here mihomo runs as its own independent s6 service instead — check
-   metacubexd's server startup for an env var to point it at the
-   already-running kernel rather than spawning a second `mihomo` process.
-5. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
+3. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
    empty; set a real one before exposing port `9090` anywhere non-trusted.
-6. **grok2api-go's `docker/entrypoint.sh` internals** — copied and run as-is
-   from upstream (real ENTRYPOINT extracted at build time, per the same
-   principle as the other services), but its exact logic wasn't inspected
-   line-by-line. It's assumed to prep `/app/data`-style paths as root, then
-   `su-exec` down to a non-root user before exec'ing the CMD args. Here it's
-   pointed at `/data/grok2api` instead of `/app/data` (namespaced like every
-   other service) and a `grok2api` user (UID 10001) is created for it to drop
-   into (`su-exec` itself is rebuilt natively for Debian/glibc, since
-   upstream's own image is Alpine and its `su-exec` binary wouldn't run on
-   this image's base). If the entrypoint hardcodes `/app/data` or
-   `/run/grok2api` instead of honoring env vars/CLI flags, this will need a
-   small adjustment once verified against the actual script.
+4. **kimi-api requires valid token** — kimi-api will fail to start if
+   `KIMI_ACCESS_TOKEN` is not set to a valid kimi.com token. The placeholder
+   `Waguri` does not work. Set this in your environment before deploying.
+
+## Resolved issues
+
+- **s6-rc oneshot format** — `network-mode-init` and `mihomo-ready` `up` files
+  were written as bash scripts with shebangs. `s6-rc-compile` treats `up` files
+  as execline, silently dropping services from the compiled database. Fixed by
+  converting to execline wrappers calling separate `run.sh` bash scripts.
+- **musl libc missing** — zai-api and kimi-api are built with `golang:alpine`
+  (musl-linked), but the runtime image is Debian (glibc). Fixed by installing
+  `musl` package in the runtime image.
+- **grok2api entrypoint conflict** — upstream `docker/entrypoint.sh` copies
+  config to `/app/config.yaml`, conflicting with OmniRoute's `/app` directory.
+  Fixed by bypassing the entrypoint and running grok2api directly via su-exec
+  with a wrapper that generates config and fixes permissions.
+- **grok2api config format** — upstream requires specific yaml structure
+  (`server.listen`, `secrets.jwtSecret`, `secrets.credentialEncryptionKey`,
+  `bootstrapAdmin`). Fixed with auto-generated default config.
+- **zai-api token-generator** — run script referenced `token-generator` but
+  the actual binary is `token-collector`. Also, `exec` before `cp` meant the
+  token copy never ran. Fixed.

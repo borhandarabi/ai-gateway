@@ -2,15 +2,34 @@
 set -e
 mkdir -p /data/grok2api
 export TZ="${TZ:-Asia/Shanghai}"
-export GROK2API_CONFIG_SOURCE="${GROK2API_CONFIG_SOURCE:-/data/grok2api/config.yaml}"
-# NOTE (open item): the real docker/entrypoint.sh from the repo wasn't
-# inspected line-by-line -- it's copied and run as-is (upstream ENTRYPOINT),
-# and is assumed to: (a) chown/prepare data dirs as root, (b) su-exec down to
-# the `grok2api` user, (c) exec the CMD args given to it. If it hardcodes
-# paths like /app/data or /run/grok2api instead of respecting env vars, this
-# will need a small patch upstream or an override here.
+
+# Ensure data dir is writable by grok2api user
+chown -R grok2api:grok2api /data/grok2api/
+chmod 755 /data/grok2api/
+
+# Generate config if missing or invalid
+if [ ! -f /data/grok2api/config.yaml ]; then
+  echo "[grok2api] No config found, generating default..."
+  KEY=$(head -c 32 /dev/urandom | base64)
+  cat > /data/grok2api/config.yaml << EOF
+server:
+  listen: ":${GROK2API_PORT:-8000}"
+
+secrets:
+  jwtSecret: "ai-gateway-default-jwt-secret-change-me-in-production-32chars"
+  credentialEncryptionKey: "${KEY}"
+
+bootstrapAdmin:
+  username: admin
+  password: admin123456
+EOF
+  chown grok2api:grok2api /data/grok2api/config.yaml
+  chmod 0600 /data/grok2api/config.yaml
+fi
+
+# NOTE: We bypass the upstream grok2api-entrypoint because it copies config
+# to /app/config.yaml which conflicts with OmniRoute's /app directory.
+# Instead we run grok2api directly as the grok2api user via su-exec.
 cd /opt/grok2api
-exec /usr/local/bin/grok2api-entrypoint \
-  /opt/grok2api/grok2api \
-  --config "/data/grok2api/config.yaml" \
-  --listen "${BIND_ADDR:-0.0.0.0}:${GROK2API_PORT:-8000}"
+exec su-exec grok2api:grok2api /opt/grok2api/grok2api \
+  --config "/data/grok2api/config.yaml"
