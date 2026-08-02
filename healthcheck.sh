@@ -21,8 +21,6 @@ check "omniroute"  "http://127.0.0.1:${OMNIROUTE_PORT:-20128}/api/monitoring/hea
 check "mimo"       "http://127.0.0.1:${MIMO_PORT:-3000}/"
 check "zai-api"    "http://127.0.0.1:${ZAI_PORT:-3001}/health"
 check "grok2api"   "http://127.0.0.1:${GROK2API_PORT:-8000}/healthz"
-check "metacubexd" "http://127.0.0.1:${CONTROL_PORT:-8080}/api/control/health"
-# mihomo is spawned by metacubexd, not a separate s6 service
 check "mihomo"     "http://127.0.0.1:${CLASH_API_PORT:-9090}/version"
 
 # kimi-api: only check if KIMI_ACCESS_TOKEN is set to a real value

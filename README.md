@@ -12,8 +12,8 @@ network namespace:
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
 - **kimi-api** (Go) — kimi.com proxy, port `3002`
 - **grok2api-go** (Go + Node/Vite) — Grok (xAI) provider proxy + dashboard, port `8000`
-- **metacubexd + mihomo** (Node + Go) — proxy dashboard/control (`8080`/`9090`)
-  and proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`), both active
+- **mihomo** (Go) — proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`) +
+  Clash API (`9090`)
 - **cloudflared** (Go, prebuilt) — optional Cloudflare Tunnel, always
   installed, idle unless `TUNNEL_TOKEN` is set
 
@@ -118,7 +118,6 @@ insurance for the remaining Go/Node builds.
 | `ZAI_AUTH_TOKEN` | `Waguri` | Auth token for zai-api. Change in production! |
 | `ZAI_AGENT_MODE` | `true` | Enable agent mode for zai-api. |
 | `GROK2API_PORT` | `8000` | grok2api port. |
-| `CONTROL_PORT` | `8080` | metacubexd dashboard port. |
 | `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
 | `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
 | `DISABLE_TUN` | `false` | Disable TUN mode (required on Railway). |
@@ -129,12 +128,6 @@ insurance for the remaining Go/Node builds.
    everywhere (`.env.example`, `docker-compose.yml`, the workflow's
    `workflow_dispatch` input / `GLM_REPO_URL` secret, `build.sh`). Until it
    exists, point `GLM_REPO` at a local checkout directory instead.
-2. **MimoApi / metacubexd bind-address support** — `TUNNEL_ONLY` mode assumes
-   every service honors a `HOST`/bind-address env var. This is confirmed for
-   OmniRoute (`HOSTNAME`) and zai-api (`HOST`), but MimoApi's and
-   metacubexd's actual source weren't inspected for this — if either
-   hardcodes `0.0.0.0`, `TUNNEL_ONLY` won't fully close it off and it'll need
-   a small upstream patch or an iptables-level fallback.
 3. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
    empty; set a real one before exposing port `9090` anywhere non-trusted.
 4. **kimi-api requires valid token** — kimi-api will fail to start if

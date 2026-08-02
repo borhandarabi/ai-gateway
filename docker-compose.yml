@@ -5,7 +5,6 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
-        metacubexd_src: ${METACUBEXD_REPO:-https://github.com/MetaCubeX/metacubexd.git#main}
         grok2api_src: ${GROK2API_REPO:-https://github.com/i-panel/grok2api-go.git#main}
         glm_src: ${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
@@ -27,7 +26,6 @@ services:
       - "3000:3000"     # MimoApi
       - "3001:3001"     # zai-api / GlmApi
       - "8000:8000"     # grok2api-go
-      - "8080:8080"     # metacubexd control
       - "9090:9090"     # mihomo Clash API
       - "7890:7890"     # mihomo mixed-port (SOCKS/HTTP)
     volumes:
@@ -35,7 +33,6 @@ services:
       - mimo_data:/data/mimo
       - glm_data:/data/glm
       - grok2api_data:/data/grok2api
-      - metacubexd_data:/data/metacubexd
       - mihomo_data:/data/mihomo
     healthcheck:
       test: ["CMD", "/usr/local/bin/healthcheck.sh"]
@@ -49,5 +46,4 @@ volumes:
   mimo_data:
   glm_data:
   grok2api_data:
-  metacubexd_data:
   mihomo_data:

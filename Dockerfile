@@ -14,7 +14,7 @@
 #   - MimoApi     (Go)                : Mimo/Xiaomi provider proxy
 #   - zai-api     (Go, aka "GlmApi")  : Z.ai/GLM provider proxy
 #   - grok2api-go (Go + Node/Vite)    : Grok (xAI) provider proxy + dashboard
-#   - mihomo + metacubexd (Go + Node) : proxy kernel + dashboard
+#   - mihomo (Go)                      : proxy kernel + Clash API
 #   - cloudflared (Go, prebuilt)      : optional Cloudflare Tunnel
 #
 # Each application stage below pulls its source from a *named build context*
@@ -25,7 +25,7 @@
 #
 #   docker buildx build \
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
-#     --build-context metacubexd_src=https://github.com/MetaCubeX/metacubexd.git#main \
+
 #     --build-context grok2api_src=https://github.com/i-panel/grok2api-go.git#main \
 #     --build-context glm_src=<GLM_REPO_URL>#<GLM_REF>   \
 #     -t ai-gateway:latest .
@@ -114,26 +114,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 RUN git clone --depth 1 https://github.com/ncopa/su-exec.git . && make
 
-# ───────────────────────── metacubexd UI (static) ───────────────────────────
-FROM node:22-alpine AS metacubexd-ui
-ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH HUSKY=0
-WORKDIR /repo
-RUN corepack enable
-COPY --from=metacubexd_src . .
-RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @metacubexd/ui generate
-# -> /repo/packages/ui/.output/public
-
-# ─────────────────────── metacubexd server (Nitro) ──────────────────────────
-FROM node:22-alpine AS metacubexd-server
-ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH HUSKY=0
-WORKDIR /repo
-RUN corepack enable
-COPY --from=metacubexd_src . .
-RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @metacubexd/server... build
-# -> /repo/apps/server/.output  (entry: server/index.mjs)
-
 # ───────────────────────── mihomo kernel binary ─────────────────────────────
 FROM alpine:3.20 AS mihomo-kernel
 ARG TARGETARCH
@@ -191,7 +171,7 @@ RUN set -eux; \
     rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
 
 LABEL org.opencontainers.image.title="ai-gateway" \
-      org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo/metacubexd + cloudflared, single image"
+      org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo + cloudflared, single image"
 
 # --- application artifacts ---
 # OmniRoute needs nothing here -- it's already fully baked into this base
@@ -206,9 +186,6 @@ COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
 COPY glm/tokens.sqlite /data/glm/tokens.sqlite
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
-
-COPY --from=metacubexd-server /repo/apps/server/.output /opt/metacubexd
-COPY --from=metacubexd-ui /repo/packages/ui/.output/public /opt/metacubexd/ui-dist
 
 COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
 COPY --from=grok2api-frontend-builder /src/frontend/dist /opt/grok2api/frontend/dist
@@ -241,7 +218,7 @@ RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/
 RUN groupadd -g 10001 grok2api \
     && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/metacubexd /data/mihomo \
+RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/mihomo \
     && chown -R node:node /data/omniroute \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
@@ -258,7 +235,7 @@ ENV OMNIROUTE_PORT=20128 \
     KIMI_ACCESS_TOKEN= \
     KIMI_TOKEN=Waguri \
     GROK2API_PORT=8000 \
-    CONTROL_PORT=8080 \
+
     CLASH_API_PORT=9090 \
     MIXED_PORT=7890 \
     ZAI_TIMEOUT=300000 \
@@ -268,7 +245,7 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_LOG_FORMAT=text \
     DISABLE_TUN=${DISABLE_TUN}
 
-EXPOSE 20128 3000 3001 3002 8000 8080 9090 7890
+EXPOSE 20128 3000 3001 3002 8000 9090 7890
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
