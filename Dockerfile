@@ -74,10 +74,12 @@ FROM golang:1.26-alpine AS deepseek-builder
 WORKDIR /src
 # Source code will be provided via --build-context deepseek_src=...
 COPY --from=deepseek_src . .
-RUN apk add --no-cache git gcc musl-dev
+RUN apk add --no-cache git
+# Fix invalid go version in go.mod (1.26.5 doesn't exist, downgrade to 1.23 for compatibility)
+RUN go mod edit -go=1.23
 RUN go mod tidy
-# main.go is the actual service entry point.
-RUN go build -o /out/deepseek-proxy main.go
+# Build all packages in the current directory (not just main.go)
+RUN go build -o /out/deepseek-proxy .
 
 # ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
 FROM node:22-alpine AS grok2api-frontend-builder
