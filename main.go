@@ -756,6 +756,10 @@ const htmlContent = `<!DOCTYPE html>
               <label for="cfTunnelToken">Tunnel Token <span class="hint">(from Zero Trust → Networks → Tunnels)</span></label>
               <input type="password" id="cfTunnelToken" placeholder="Leave empty to keep the current token" autocomplete="new-password">
             </div>
+            <div class="field">
+              <label for="cfDashboardPublicUrl">Clash dashboard public URL <span class="hint">(e.g. https://dash.example.com — the hostname you routed to the Clash API in your own ingress)</span></label>
+              <input type="text" id="cfDashboardPublicUrl" placeholder="https://dash.example.com">
+            </div>
           </div>
 
           <div class="row" style="margin-top:12px;">
@@ -769,7 +773,7 @@ const htmlContent = `<!DOCTYPE html>
 
         <div class="panel">
           <div class="panel-head"><h2>Docker web apps</h2></div>
-          <p class="sub">Each entry gets its own tab under "Apps" (shown as an iframe) and, in Full API Token mode, its own public subdomain — e.g. zai/grok/deepseek.</p>
+          <p class="sub">Each entry gets its own tab under "Apps" (shown as an iframe) and, in Full API Token mode, its own public subdomain — e.g. zai/grok/deepseek. <span class="hint">In Tunnel Token mode (manual ingress) or when there's no tunnel at all, set "Public URL" below if the app isn't reachable at this panel's own hostname.</span></p>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
               <label for="dsName">Name <span class="hint">(used as subdomain, lowercase)</span></label>
@@ -779,11 +783,15 @@ const htmlContent = `<!DOCTYPE html>
               <label for="dsPort">Local port</label>
               <input type="number" id="dsPort" placeholder="3000" min="1" max="65535">
             </div>
+            <div class="field">
+              <label for="dsPublicUrl">Public URL <span class="hint">(optional override)</span></label>
+              <input type="text" id="dsPublicUrl" placeholder="https://zai.example.com">
+            </div>
             <button class="btn btn-primary" onclick="addDockerService()">Add</button>
           </div>
           <table class="data" style="margin-top:14px;">
-            <thead><tr><th>Name</th><th>Local port</th><th></th></tr></thead>
-            <tbody id="dockerServicesBody"><tr class="empty-row"><td colspan="3">No Docker web apps added yet.</td></tr></tbody>
+            <thead><tr><th>Name</th><th>Local port</th><th>Public URL</th><th></th></tr></thead>
+            <tbody id="dockerServicesBody"><tr class="empty-row"><td colspan="4">No Docker web apps added yet.</td></tr></tbody>
           </table>
         </div>
 
@@ -1634,6 +1642,8 @@ const htmlContent = `<!DOCTYPE html>
       if (data.mode) document.getElementById('cfMode').value = data.mode;
       updateCloudflareModeUI();
       if (data.zone_name) document.getElementById('cfZoneName').value = data.zone_name;
+      document.getElementById('cfDashboardPublicUrl').value = data.dashboard_public_url || '';
+      cfInfoPromise = Promise.resolve(data); // همین پاسخ را برای resolveServicePublicUrl/loadDashboardFrame هم کش کن
 
       var routesBox = document.getElementById('cfRoutes');
       routesBox.innerHTML = '';
@@ -1660,12 +1670,14 @@ const htmlContent = `<!DOCTYPE html>
       mode: document.getElementById('cfMode').value,
       api_token: document.getElementById('cfApiToken').value,
       zone_name: document.getElementById('cfZoneName').value.trim(),
-      tunnel_token: document.getElementById('cfTunnelToken').value
+      tunnel_token: document.getElementById('cfTunnelToken').value,
+      dashboard_public_url: document.getElementById('cfDashboardPublicUrl').value.trim()
     };
     api('/api/cloudflare/settings', body).then(function(data){
       showMessage(data.message || 'Saved', 'success');
       document.getElementById('cfApiToken').value = '';
       document.getElementById('cfTunnelToken').value = '';
+      cfInfoPromise = null; // مد/دامنه/آدرس داشبورد ممکن است عوض شده باشد
       loadCloudflareSettings();
     }).catch(function(err){
       showMessage(err.message, 'danger');
@@ -1676,11 +1688,38 @@ const htmlContent = `<!DOCTYPE html>
     showMessage('Cloudflare tunnel: ' + action + '…', 'success');
     api('/api/cloudflare/' + action, {}).then(function(data){
       showMessage(data.message || action, 'success');
+      cfInfoPromise = null;
       loadCloudflareSettings();
     }).catch(function(err){
       showMessage(err.message, 'danger');
     });
   };
+
+  // -----------------------------------------------------------------
+  // resolveServicePublicUrl/loadDashboardFrame یک نمونه از پاسخ
+  // /api/cloudflare/settings را کش می‌کنند تا هر بار که تب Apps/Dashboard باز
+  // می‌شود دوباره fetch نزنند؛ هر جا mode/دامنه/سرویس‌ها ممکن است عوض شده باشد
+  // (ذخیره‌ی تنظیمات Cloudflare، افزودن/حذف Docker service) کش را invalidate می‌کنیم.
+  // -----------------------------------------------------------------
+  var cfInfoPromise = null;
+  function getCloudflareInfo(){
+    if (!cfInfoPromise){
+      cfInfoPromise = fetch('/api/cloudflare/settings').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+    }
+    return cfInfoPromise;
+  }
+
+  // parseUrlParts یک URL کامل (مثلاً از dashboard_public_url یا quick_tunnel_urls) را
+  // به scheme/host/port می‌شکند تا بشود دوباره برایش query string ساخت.
+  function parseUrlParts(url){
+    try {
+      var u = new URL(url);
+      var scheme = u.protocol.replace(':', '');
+      return { scheme: scheme, host: u.hostname, port: u.port || (scheme === 'https' ? '443' : '80') };
+    } catch (e){
+      return { scheme: 'https', host: url, port: '443' };
+    }
+  }
 
   // -----------------------------------------------------------------
   // Docker web apps (zai/grok/deepseek/...): Settings CRUD + Apps tabs
@@ -1693,7 +1732,7 @@ const htmlContent = `<!DOCTYPE html>
       if (!body) return data.services || [];
       var services = data.services || [];
       if (!services.length){
-        body.innerHTML = '<tr class="empty-row"><td colspan="3">No Docker web apps added yet.</td></tr>';
+        body.innerHTML = '<tr class="empty-row"><td colspan="4">No Docker web apps added yet.</td></tr>';
         return services;
       }
       body.innerHTML = '';
@@ -1701,6 +1740,7 @@ const htmlContent = `<!DOCTYPE html>
         var tr = document.createElement('tr');
         var tdName = document.createElement('td'); tdName.textContent = s.name;
         var tdPort = document.createElement('td'); tdPort.className = 'mono'; tdPort.textContent = s.port;
+        var tdUrl = document.createElement('td'); tdUrl.className = 'mono'; tdUrl.textContent = s.public_url || 'auto';
         var tdAct = document.createElement('td');
         var delBtn = document.createElement('button');
         delBtn.className = 'btn btn-danger btn-sm';
@@ -1709,12 +1749,13 @@ const htmlContent = `<!DOCTYPE html>
           askConfirm('Remove ' + s.name + '?', 'This removes its Apps tab and (if Full API Token mode is on) its public route.', function(){
             api('/api/delete_docker_service', { name: s.name }).then(function(data){
               showMessage(data.message || 'Removed', 'success');
+              cfInfoPromise = null; // ست سرویس‌ها عوض شد؛ نگاشت هاست‌نیم‌ها باید دوباره خوانده شود
               loadDockerServices();
             }).catch(function(err){ showMessage(err.message, 'danger'); });
           });
         };
         tdAct.appendChild(delBtn);
-        tr.appendChild(tdName); tr.appendChild(tdPort); tr.appendChild(tdAct);
+        tr.appendChild(tdName); tr.appendChild(tdPort); tr.appendChild(tdUrl); tr.appendChild(tdAct);
         body.appendChild(tr);
       });
       return services;
@@ -1728,12 +1769,15 @@ const htmlContent = `<!DOCTYPE html>
   window.addDockerService = function(){
     var name = document.getElementById('dsName').value.trim().toLowerCase();
     var port = parseInt(document.getElementById('dsPort').value, 10);
+    var publicUrl = document.getElementById('dsPublicUrl').value.trim();
     if (!name){ showMessage('Name is required', 'danger'); return; }
     if (isNaN(port) || port < 1 || port > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
-    api('/api/add_docker_service', { name: name, port: port }).then(function(data){
+    api('/api/add_docker_service', { name: name, port: port, public_url: publicUrl }).then(function(data){
       showMessage(data.message || 'Added', 'success');
       document.getElementById('dsName').value = '';
       document.getElementById('dsPort').value = '';
+      document.getElementById('dsPublicUrl').value = '';
+      cfInfoPromise = null; // ست سرویس‌ها عوض شد؛ نگاشت هاست‌نیم‌ها باید دوباره خوانده شود
       loadDockerServices();
     }).catch(function(err){
       showMessage(err.message, 'danger');
@@ -1770,9 +1814,36 @@ const htmlContent = `<!DOCTYPE html>
   }
   window.loadAppsTabs = loadAppsTabs;
 
-  function showAppFrame(service){
+  // resolveServicePublicUrl آدرس واقعیِ قابل‌دسترسی این Docker service را برمی‌گرداند.
+  // ترتیب اولویت:
+  //   ۱) override دستی service.public_url (کاربر خودش در Settings ست کرده)
+  //   ۲) هاست‌نیم واقعی‌ای که تونل Cloudflare در حالت api_token برای این سرویس ساخته
+  //      (بدون پورت، چون تونل روی 443 با SNI/هاست‌نیم روت می‌کند، نه با پورت محلی)
+  //   ۳) حالت quick: Docker serviceها اصلاً تونل نمی‌شوند → null (پیام مناسب نشان داده می‌شود)
+  //   ۴) در غیر این صورت (بدون تونل، دسترسی مستقیم با IP/دامنه‌ی متصل به IP): همان
+  //      رفتار قدیمی hostname:port که فقط برای این حالت واقعاً درست است
+  async function resolveServicePublicUrl(service){
+    if (service.public_url){
+      return service.public_url.replace(/\/+$/, '') + (service.path || '/');
+    }
+    var cf = await getCloudflareInfo();
+    if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts[service.name]){
+      return 'https://' + cf.service_hosts[service.name] + (service.path || '/');
+    }
+    if (cf.mode === 'quick'){
+      return null;
+    }
+    return 'http://' + window.location.hostname + ':' + service.port + (service.path || '/');
+  }
+
+  async function showAppFrame(service){
     var frame = document.getElementById('appsFrame');
-    var url = 'http://' + window.location.hostname + ':' + service.port + (service.path || '/');
+    var url = await resolveServicePublicUrl(service);
+    if (!url){
+      frame.removeAttribute('src');
+      showMessage('"' + service.name + '" has no public route under a Quick Tunnel. Switch to Full API Token mode, or set a Public URL for it in Settings.', 'danger');
+      return;
+    }
     frame.src = url;
   }
 
@@ -1835,18 +1906,39 @@ const htmlContent = `<!DOCTYPE html>
     });
   };
 
-  function loadDashboardFrame(){
+  async function loadDashboardFrame(){
     var frame = document.getElementById('dashboardFrame');
-    var host = window.location.hostname;
-    var port = '9090', secret = '';
+    var localPort = '9090', secret = '';
     if (lastTemplate){
       try {
         var clash = lastTemplate.experimental.clash_api;
-        if (clash.external_controller) port = clash.external_controller.split(':').pop();
+        if (clash.external_controller) localPort = clash.external_controller.split(':').pop();
         if (clash.secret) secret = clash.secret;
       } catch (e){ /* template not loaded yet, use defaults */ }
     }
-    var localUrl = 'http://' + host + ':' + port + '/ui/';
+
+    // مثل resolveServicePublicUrl: به‌جای فرض "همین هاست، پورت دیگر"، آدرس واقعی
+    // Clash API را از یکی از این منابع می‌گیریم (به ترتیب اولویت):
+    //   ۱) dashboard_public_url دستی (حالت tunnel_token با ingress دستی)
+    //   ۲) هاست‌نیم "dash.<domain>" که تونل api_token خودکار ساخته (پورت 443، https)
+    //   ۳) URL کامل Quick Tunnel برای dash (هم پورت هم اسکیم را از خودش می‌گیریم)
+    //   ۴) بدون تونل: همان رفتار قدیمی hostname:پورت محلی
+    var cf = await getCloudflareInfo();
+    var scheme, host, port;
+    if (cf.dashboard_public_url){
+      var p = parseUrlParts(cf.dashboard_public_url);
+      scheme = p.scheme; host = p.host; port = p.port;
+    } else if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts['dash']){
+      scheme = 'https'; host = cf.service_hosts['dash']; port = '443';
+    } else if (cf.mode === 'quick' && cf.quick_tunnel_urls && cf.quick_tunnel_urls['dash']){
+      var pq = parseUrlParts(cf.quick_tunnel_urls['dash']);
+      scheme = pq.scheme; host = pq.host; port = pq.port;
+    } else {
+      scheme = 'http'; host = window.location.hostname; port = localPort;
+    }
+
+    var portSuffix = (port && port !== '443' && port !== '80') ? (':' + port) : '';
+    var localUrl = scheme + '://' + host + portSuffix + '/ui/';
     var fallbackUrl = 'https://metacubexd.pages.dev/#/setup?hostname=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port) + '&secret=' + encodeURIComponent(secret);
 
     var fallbackTimer = setTimeout(function(){
@@ -1921,6 +2013,12 @@ type DockerService struct {
 	Name string `json:"name"`           // اسم/ساب‌دامین، مثل "zai"
 	Port int    `json:"port"`           // پورتی که کانتینر روی هاست منتشر کرده، مثل 3000
 	Path string `json:"path,omitempty"` // مسیر اختیاری، پیش‌فرض "/"
+	// PublicURL آدرس عمومی این سرویس را دستی override می‌کند. لازم است وقتی مدیر
+	// نمی‌تواند هاست‌نیم واقعی را حدس بزند: حالت tunnel_token (ingress دستی توسط
+	// کاربر) یا هر ریورس‌پروکسی/تونل دیگری غیر از حالت api_token. اگر خالی باشد،
+	// فرانت‌اند بر اساس mode فعلی تونل Cloudflare حدس می‌زند (به resolveServicePublicUrl
+	// در htmlContent مراجعه کنید).
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 // CloudflareConfig تنظیمات تونل Cloudflare را نگه می‌دارد. سه حالت پشتیبانی می‌شود:
@@ -1940,6 +2038,11 @@ type CloudflareConfig struct {
 	TunnelToken string `json:"tunnel_token,omitempty"`
 	TunnelID    string `json:"tunnel_id,omitempty"`
 	TunnelName  string `json:"tunnel_name,omitempty"`
+	// DashboardPublicURL فقط در حالت tunnel_token معنا دارد: چون ingress آنجا دستی
+	// توسط خود کاربر در داشبورد Cloudflare تنظیم می‌شود، مدیر نمی‌تواند هاست‌نیم
+	// عمومی Clash API/Dashboard را حدس بزند و کاربر باید آن را اینجا صریحاً بدهد
+	// (مثلاً https://dash.example.com) تا داشبورد و metacubexd.pages.dev درست کار کنند.
+	DashboardPublicURL string `json:"dashboard_public_url,omitempty"`
 }
 
 type AppState struct {
@@ -1997,7 +2100,7 @@ const minimalDefaultTemplate = `{
     "clash_api": {
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
       "external_ui": "ui",
-      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
       "secret": "",
       "default_mode": "rule"
     }
@@ -2073,7 +2176,7 @@ const defaultTemplateRich = `{
       "default_mode": "rule",
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
       "external_ui": "ui",
-      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
       "secret": "__CLASH_SECRET__"
     }
   },
@@ -3100,6 +3203,10 @@ func cfEnsureTunnel(token, accountID string, existing CloudflareConfig) (tunnelI
 
 // ingressRoute یک قانون ingress در تونل Cloudflare (هاست‌نیم عمومی → آدرس محلی).
 type ingressRoute struct {
+	// Key شناسه‌ی منطقی این route است: "panel"، "dash"، یا اسم Docker service —
+	// برای اینکه فرانت‌اند بتواند هاست‌نیم درست هر سرویس را بدون duplicate کردن
+	// منطق ساخت ساب‌دامین (service.Name + "." + domain) از API بخواند.
+	Key      string
 	Hostname string
 	Service  string
 }
@@ -3134,13 +3241,14 @@ func computeTunnelRoutes(state AppState) []ingressRoute {
 		return nil
 	}
 	routes := []ingressRoute{
-		{Hostname: "panel." + domain, Service: "http://127.0.0.1" + apiPort},
+		{Key: "panel", Hostname: "panel." + domain, Service: "http://127.0.0.1" + apiPort},
 	}
 	if clashAddr, err := getClashAPIAddr(); err == nil {
-		routes = append(routes, ingressRoute{Hostname: "dash." + domain, Service: "http://" + clashAddr})
+		routes = append(routes, ingressRoute{Key: "dash", Hostname: "dash." + domain, Service: "http://" + clashAddr})
 	}
 	for _, s := range state.DockerServices {
 		routes = append(routes, ingressRoute{
+			Key:      s.Name,
 			Hostname: s.Name + "." + domain,
 			Service:  fmt.Sprintf("http://127.0.0.1:%d", s.Port),
 		})
@@ -4459,6 +4567,7 @@ func addDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Path == "" {
 		req.Path = "/"
 	}
+	req.PublicURL = strings.TrimSpace(req.PublicURL)
 
 	state := readStateOrDefault()
 	for _, s := range state.DockerServices {
@@ -4658,32 +4767,41 @@ func cloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	cfQuickURLsMu.RUnlock()
 
 	var routes []string
+	// serviceHosts نگاشت "کلید منطقی" (panel/dash/اسم هر Docker service) به هاست‌نیم
+	// عمومی واقعی است. فرانت‌اند iframe ها را از روی همین می‌سازد، نه با حدس زدن
+	// window.location.hostname + پورت محلی (که زیر تونل که هر سرویس زیردامنه‌ی
+	// جدای خودش را دارد، اصلاً درست نیست).
+	serviceHosts := map[string]string{}
 	if cfg.Mode == "api_token" && cfg.ZoneName != "" {
 		for _, r := range computeTunnelRoutes(state) {
 			routes = append(routes, r.Hostname)
+			serviceHosts[r.Key] = r.Hostname
 		}
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"mode":              cfg.Mode,
-		"zone_name":         cfg.ZoneName,
-		"tunnel_name":       cfg.TunnelName,
-		"tunnel_id":         cfg.TunnelID,
-		"api_token_set":     cfg.APIToken != "",
-		"tunnel_token_set":  cfg.TunnelToken != "",
-		"running":           running,
-		"quick_tunnel_urls": quickURLs,
-		"routes":            routes,
+		"mode":                 cfg.Mode,
+		"zone_name":            cfg.ZoneName,
+		"tunnel_name":          cfg.TunnelName,
+		"tunnel_id":            cfg.TunnelID,
+		"api_token_set":        cfg.APIToken != "",
+		"tunnel_token_set":     cfg.TunnelToken != "",
+		"running":              running,
+		"quick_tunnel_urls":    quickURLs,
+		"routes":               routes,
+		"service_hosts":        serviceHosts,
+		"dashboard_public_url": cfg.DashboardPublicURL,
 	})
 }
 
 func updateCloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Mode        string `json:"mode"`
-		APIToken    string `json:"api_token"`
-		ZoneName    string `json:"zone_name"`
-		TunnelToken string `json:"tunnel_token"`
-		TunnelName  string `json:"tunnel_name"`
+		Mode               string `json:"mode"`
+		APIToken           string `json:"api_token"`
+		ZoneName           string `json:"zone_name"`
+		TunnelToken        string `json:"tunnel_token"`
+		TunnelName         string `json:"tunnel_name"`
+		DashboardPublicURL string `json:"dashboard_public_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
@@ -4722,6 +4840,9 @@ func updateCloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.TunnelName) != "" {
 		cfg.TunnelName = strings.TrimSpace(req.TunnelName)
 	}
+	// برخلاف توکن‌ها، این فیلد محرمانه نیست، پس همیشه با مقدار فرم جایگزین می‌شود
+	// (رشته‌ی خالی یعنی کاربر عمداً override را پاک کرده).
+	cfg.DashboardPublicURL = strings.TrimSpace(req.DashboardPublicURL)
 	state.Cloudflare = cfg
 	if err := writeState(state); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
