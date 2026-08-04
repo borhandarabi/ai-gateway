@@ -6,7 +6,7 @@ services:
       additional_contexts:
         mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
         grok2api_src: ${GROK2API_REPO:-https://github.com/chenyme/grok2api.git#main}
-        glm_src: ${GLM_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
+        zai_src: ${ZAI_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
         deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
       args:
@@ -33,7 +33,7 @@ services:
     volumes:
       - omniroute_data:/data/omniroute
       - mimo_data:/data/mimo
-      - glm_data:/data/glm
+      - zai_data:/data/zai
       - grok2api_data:/data/grok2api
       - mihomo_data:/data/mihomo
     healthcheck:
@@ -46,6 +46,6 @@ services:
 volumes:
   omniroute_data:
   mimo_data:
-  glm_data:
+  zai_data:
   grok2api_data:
   mihomo_data:

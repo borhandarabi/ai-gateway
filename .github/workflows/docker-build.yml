@@ -17,7 +17,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   MIMO_REPO: https://github.com/hooshidev3/mimo-ai-proxy.git#main
   GROK2API_REPO: https://github.com/chenyme/grok2api.git#main
-  GLM_REPO: https://github.com/izaart95-jpg/GLM-Free-API.git#main
+  ZAI_REPO: https://github.com/izaart95-jpg/GLM-Free-API.git#main
   KIMI_REPO: https://github.com/izaart95-jpg/KimiFreeAPI.git#main
   DEEPSEEK_REPO: https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
@@ -88,7 +88,7 @@ jobs:
           build-contexts: |
             mimo_src=${{ env.MIMO_REPO }}
             grok2api_src=${{ env.GROK2API_REPO }}
-            glm_src=${{ env.GLM_REPO }}
+            zai_src=${{ env.ZAI_REPO }}
             kimi_src=${{ env.KIMI_REPO }}
             deepseek_src=${{ env.DEEPSEEK_REPO }}
           cache-from: type=gha,scope=${{ matrix.platform }}
@@ -110,7 +110,7 @@ jobs:
 
   # Merges the amd64 + arm64 digests built above into one multi-arch manifest
   # list under the real tags (sha + latest, or the custom tag) -- run once per
-  # variant (default / railway), each producing its own manifest list. This
+  # variant (default), each producing its own manifest list. This
   # step needs no build resources itself, just registry API calls.
   merge:
     needs: build
@@ -121,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [default, railway]
+        variant: [default]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4

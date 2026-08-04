@@ -27,13 +27,13 @@
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
 
 #     --build-context grok2api_src=https://github.com/chenyme/grok2api.git#main \
-#     --build-context glm_src=<GLM_REPO_URL>#<GLM_REF>   \
+#     --build-context zai_src=<ZAI_REPO_URL>#<ZAI_REF>   \
 #     -t ai-gateway:latest .
 #
 # See build.sh / .github/workflows/docker-build.yml for the wired-up version.
 #
-# NOTE (open item): glm_src has no URL yet (repo not pushed). Until it exists,
-# pass a local path instead, e.g. --build-context glm_src=./glm-local-checkout
+# NOTE (open item): zai_src has no URL yet (repo not pushed). Until it exists,
+# pass a local path instead, e.g. --build-context zai_src=./zai-local-checkout
 # so the image still builds for local testing.
 
 ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:3.8.49-web
@@ -46,9 +46,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mimopro
 # templates/ dir is required at runtime by the dashboard views
 
 # ─────────────────────────── zai-api / GlmApi (Go) ──────────────────────────
-FROM golang:1.26-alpine AS glm-builder
+FROM golang:1.26-alpine AS zai-builder
 WORKDIR /src
-COPY --from=glm_src . .
+COPY --from=zai_src . .
 RUN apk add --no-cache git gcc musl-dev
 RUN go mod init zai-api
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
@@ -188,8 +188,8 @@ LABEL org.opencontainers.image.title="ai-gateway" \
 COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
-COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
-COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
+COPY --from=zai-builder /out/zai-api /opt/zai/zai-api
+COPY --from=zai-builder /out/token-collector /opt/zai/token-collector
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy
@@ -218,7 +218,7 @@ RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/
 RUN groupadd -g 10001 grok2api \
     && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/sing-box \
+RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box \
     && chown -R node:node /data/omniroute \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api
 
@@ -228,7 +228,7 @@ RUN mkdir -p /run/s6/container_environment \
 
 ENV OMNIROUTE_PORT=20128 \
     MIMO_PORT=3003 \
-    GLM_PORT=3001 \
+    ZAI_PORT=3001 \
     KIMI_PORT=3002 \
     KIMI_ACCESS_TOKEN= \
     KIMI_TOKEN=Waguri \

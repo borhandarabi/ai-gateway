@@ -1,7 +1,7 @@
 #!/command/with-contenv bash
 set -e
-cd /opt/glm
-export PORT="${GLM_PORT:-3001}"
+cd /opt/zai
+export PORT="${ZAI_PORT:-3001}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export TIMEOUT="${ZAI_TIMEOUT:-300000}"
 export AUTH_TOKEN="${ZAI_AUTH_TOKEN:-Waguri}"
@@ -10,20 +10,20 @@ export LOG_LEVEL="${ZAI_LOG_LEVEL:-info}"
 export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
 
 
-export HTTP_PROXY="socks5h://127.0.0.1:${GLM_PROXY:-2001}"
-export HTTPS_PROXY="socks5h://127.0.0.1:${GLM_PROXY:-2001}"
-export ALL_PROXY="socks5h://127.0.0.1:${GLM_PROXY:-2001}"
+export HTTP_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
+export HTTPS_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
+export ALL_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
 export NO_PROXY="localhost,127.0.0.1"
 
 # If no tokens database exists, generate one first.
 # NOTE: token-collector is the actual binary (not token-generator).
 # We must NOT use exec here because we need to copy the result afterwards.
-if [ ! -f /data/glm/tokens.sqlite ]; then
+if [ ! -f /data/zai/tokens.sqlite ]; then
     echo "[zai-api] No tokens.sqlite found, generating tokens..."
     ./token-collector --tokens 750 --batch 3 --no-tui
-    cp -rf ./tokens.sqlite /data/glm/tokens.sqlite
+    cp -rf ./tokens.sqlite /data/zai/tokens.sqlite
 fi
 
 # AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
 # this in production, do not rely on the default.
-exec ./zai-api --agent-mode --db-path=/data/glm/tokens.sqlite
+exec ./zai-api --agent-mode --db-path=/data/zai/tokens.sqlite

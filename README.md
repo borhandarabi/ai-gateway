@@ -88,7 +88,7 @@ docker compose logs -f
 # Manual docker build with required build-contexts:
 # docker buildx build \
 #   --build-context deepseek_src=https://github.com/izaart95-jpg/DeepSeekFreeAPI.git \
-#   --build-context glm_src=https://github.com/izaart95-jpg/GLM-Free-API.git \
+#   --build-context zai_src=https://github.com/izaart95-jpg/GLM-Free-API.git \
 #   -t ghcr.io/borhandarabi/ai-gateway:latest \
 #   --push \
 #   .
@@ -124,10 +124,10 @@ insurance for the remaining Go/Node builds.
 
 ## Open items (explicitly unresolved — do not treat as done)
 
-1. **zai-api repo URL** — not pushed yet. `GLM_REPO` is blank/placeholder
+1. **zai-api repo URL** — not pushed yet. `ZAI_REPO` is blank/placeholder
    everywhere (`.env.example`, `docker-compose.yml`, the workflow's
-   `workflow_dispatch` input / `GLM_REPO_URL` secret, `build.sh`). Until it
-   exists, point `GLM_REPO` at a local checkout directory instead.
+   `workflow_dispatch` input / `ZAI_REPO_URL` secret, `build.sh`). Until it
+   exists, point `ZAI_REPO` at a local checkout directory instead.
 3. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
    empty; set a real one before exposing port `9090` anywhere non-trusted.
 4. **kimi-api requires valid token** — kimi-api will fail to start if
