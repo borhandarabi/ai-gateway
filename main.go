@@ -67,6 +67,70 @@ func getEnvDefault(key, def string) string {
 	return def
 }
 
+// managedEnvKeys لیست کلیدهای مبتنی‌بر env هستند که از صفحه‌ی Settings هم قابل
+// مدیریت‌اند (نه فقط با export کردن قبل از اجرا).
+var managedEnvKeys = []string{
+	"BIND_ADDR", "API_PORT",
+	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
+	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR",
+}
+
+// envKeysRequiringRestart کلیدهایی هستند که چون روی socket شنود HTTP یا متغیرهای
+// سراسری خوانده‌شده در ابتدای main() اثر می‌گذارند، فقط از ری‌استارت بعدی مدیر اعمال می‌شوند.
+var envKeysRequiringRestart = map[string]bool{"BIND_ADDR": true, "API_PORT": true}
+
+var (
+	envOverridesMu    sync.RWMutex
+	envOverridesCache map[string]string
+)
+
+// loadEnvOverridesCache باید در ابتدای main() صدا زده شود تا override های ذخیره‌شده
+// از UI، قبل از هر استفاده‌ای از getSetting، در حافظه بارگذاری شوند.
+func loadEnvOverridesCache() {
+	state := readStateOrDefault()
+	envOverridesMu.Lock()
+	envOverridesCache = state.EnvOverrides
+	if envOverridesCache == nil {
+		envOverridesCache = map[string]string{}
+	}
+	envOverridesMu.Unlock()
+}
+
+// getSetting یک تنظیم را با این اولویت برمی‌گرداند: مقدار ذخیره‌شده از صفحه‌ی
+// Settings (state.json) > متغیر محیطی واقعی > مقدار پیش‌فرض. یعنی تغییر از UI
+// واقعاً روی رفتار مدیر اثر می‌گذارد، نه فقط ذخیره‌ی نمایشی.
+func getSetting(key, def string) string {
+	envOverridesMu.RLock()
+	v, ok := envOverridesCache[key]
+	envOverridesMu.RUnlock()
+	if ok && v != "" {
+		return v
+	}
+	return getEnvDefault(key, def)
+}
+
+// setSetting یک override را در state.json ذخیره می‌کند (مقدار خالی یعنی حذف
+// override و بازگشت به متغیر محیطی/پیش‌فرض).
+func setSetting(key, value string) error {
+	state := readStateOrDefault()
+	if state.EnvOverrides == nil {
+		state.EnvOverrides = map[string]string{}
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		delete(state.EnvOverrides, key)
+	} else {
+		state.EnvOverrides[key] = value
+	}
+	if err := writeState(state); err != nil {
+		return err
+	}
+	envOverridesMu.Lock()
+	envOverridesCache = state.EnvOverrides
+	envOverridesMu.Unlock()
+	return nil
+}
+
 func jsonResponse(w http.ResponseWriter, status int, data map[string]interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -81,6 +145,21 @@ func requireMethod(method string, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
+	}
+}
+
+// settingsMethodRouter یک مسیر واحد را بین دو هندلر بر اساس متد HTTP تقسیم می‌کند
+// (GET برای خواندن وضعیت فعلی، POST برای ذخیره‌ی تغییرات) — برای /api/cloudflare/settings.
+func settingsMethodRouter(getHandler, postHandler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getHandler(w, r)
+		case http.MethodPost:
+			postHandler(w, r)
+		default:
+			jsonResponse(w, http.StatusMethodNotAllowed, map[string]interface{}{"error": "Method not allowed"})
+		}
 	}
 }
 
@@ -328,6 +407,7 @@ const htmlContent = `<!DOCTYPE html>
     border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;outline:none;
   }
   select.node-select:focus{border-color:var(--accent);}
+  #appsTabs .btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 
   table.data td.live-outbound{min-width:190px;}
   table.data td.live-outbound select.node-select{width:100%;min-width:0;padding:6px 9px;font-size:12.5px;}
@@ -434,6 +514,14 @@ const htmlContent = `<!DOCTYPE html>
       <button class="navitem" data-page="warp" onclick="showPage('warp')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"/></svg>
         WARP Nodes <span class="count" id="countWarp">0</span>
+      </button>
+      <button class="navitem" data-page="dashboard" onclick="showPage('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        Dashboard
+      </button>
+      <button class="navitem" data-page="apps" onclick="showPage('apps')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        Apps <span class="count" id="countApps">0</span>
       </button>
       <button class="navitem" data-page="raw" onclick="showPage('raw')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 17l-5-5 5-5M16 7l5 5-5 5"/></svg>
@@ -624,6 +712,117 @@ const htmlContent = `<!DOCTYPE html>
               Download / reinstall
             </button>
           </div>
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-ghost btn-sm" onclick="controlSingbox('start')">Start</button>
+            <button class="btn btn-ghost btn-sm" onclick="controlSingbox('restart')">Restart</button>
+            <button class="btn btn-danger btn-sm" onclick="controlSingbox('stop')">Stop</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Cloudflare Tunnel</h2>
+            <button class="btn btn-ghost btn-sm" onclick="loadCloudflareSettings()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+              Refresh
+            </button>
+          </div>
+          <p class="sub">Exposes the admin panel, the Clash dashboard, and every Docker web app below through a public Cloudflare hostname. Proxy services in the Services tab always stay private.</p>
+          <div id="cfStatus" class="row" style="margin-bottom:14px;"></div>
+
+          <div class="field">
+            <label>Mode</label>
+            <select id="cfMode" onchange="updateCloudflareModeUI()">
+              <option value="api_token">Full API Token — I own a domain in Cloudflare (fully automatic routes + DNS)</option>
+              <option value="tunnel_token">Tunnel Token only — I already created a tunnel and set routes myself</option>
+              <option value="quick">None of these — use a free auto-generated *.trycloudflare.com URL</option>
+            </select>
+          </div>
+
+          <div id="cfFieldsApiToken" class="row" style="align-items:flex-end;">
+            <div class="field">
+              <label for="cfApiToken">Cloudflare API Token <span class="hint">(Account → Cloudflare Tunnel:Edit, Zone → DNS:Edit)</span></label>
+              <input type="password" id="cfApiToken" placeholder="Leave empty to keep the current token" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label for="cfZoneName">Domain (zone) you own in Cloudflare</label>
+              <input type="text" id="cfZoneName" placeholder="example.com">
+            </div>
+          </div>
+
+          <div id="cfFieldsTunnelToken" class="row" style="align-items:flex-end;">
+            <div class="field">
+              <label for="cfTunnelToken">Tunnel Token <span class="hint">(from Zero Trust → Networks → Tunnels)</span></label>
+              <input type="password" id="cfTunnelToken" placeholder="Leave empty to keep the current token" autocomplete="new-password">
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <button class="btn btn-primary" onclick="saveCloudflareSettings()">Save</button>
+            <button class="btn btn-ghost btn-sm" onclick="controlCloudflare('start')">Start</button>
+            <button class="btn btn-ghost btn-sm" onclick="controlCloudflare('restart')">Restart</button>
+            <button class="btn btn-danger btn-sm" onclick="controlCloudflare('stop')">Stop</button>
+          </div>
+          <div id="cfRoutes" style="margin-top:14px;"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Docker web apps</h2></div>
+          <p class="sub">Each entry gets its own tab under "Apps" (shown as an iframe) and, in Full API Token mode, its own public subdomain — e.g. zai/grok/deepseek.</p>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field">
+              <label for="dsName">Name <span class="hint">(used as subdomain, lowercase)</span></label>
+              <input type="text" id="dsName" placeholder="e.g. zai">
+            </div>
+            <div class="field">
+              <label for="dsPort">Local port</label>
+              <input type="number" id="dsPort" placeholder="3000" min="1" max="65535">
+            </div>
+            <button class="btn btn-primary" onclick="addDockerService()">Add</button>
+          </div>
+          <table class="data" style="margin-top:14px;">
+            <thead><tr><th>Name</th><th>Local port</th><th></th></tr></thead>
+            <tbody id="dockerServicesBody"><tr class="empty-row"><td colspan="3">No Docker web apps added yet.</td></tr></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>Advanced (environment) settings</h2></div>
+          <p class="sub">These normally come from environment variables at startup; changing them here overrides that (persisted, and used the next time the relevant action runs). <span class="hint">BIND_ADDR/API_PORT need a manager restart to take effect.</span></p>
+          <div id="envSettingsBody"></div>
+          <div class="row" style="margin-top:12px;">
+            <button class="btn btn-primary" onclick="saveEnvSettings()">Save changes</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ DASHBOARD (metacubexd) ============ -->
+      <section class="page" id="page-dashboard">
+        <div class="page-head">
+          <div>
+            <h1>Dashboard</h1>
+            <p>Clash dashboard (metacubexd), served locally by sing-box — falls back to the public metacubexd.pages.dev build if the local one isn't ready yet.</p>
+          </div>
+        </div>
+        <div class="panel" style="padding:0;overflow:hidden;">
+          <iframe id="dashboardFrame" style="width:100%;height:78vh;border:0;display:block;" referrerpolicy="no-referrer"></iframe>
+        </div>
+      </section>
+
+      <!-- ============ APPS (Docker web frontends) ============ -->
+      <section class="page" id="page-apps">
+        <div class="page-head">
+          <div>
+            <h1>Apps</h1>
+            <p>Frontends of Docker web apps configured in Settings (e.g. zai, grok, deepseek).</p>
+          </div>
+        </div>
+        <div id="appsTabs" class="row" style="margin-bottom:12px;"></div>
+        <div class="panel" id="appsEmpty" style="display:none;">
+          <p class="sub">No Docker web apps configured yet. Add one from the Settings page.</p>
+        </div>
+        <div class="panel" id="appsFrameWrap" style="padding:0;overflow:hidden;display:none;">
+          <iframe id="appsFrame" style="width:100%;height:78vh;border:0;display:block;" referrerpolicy="no-referrer"></iframe>
         </div>
       </section>
 
@@ -785,7 +984,9 @@ const htmlContent = `<!DOCTYPE html>
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
     if (name === 'raw') ensureRawEditors();
-    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); }
+    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadEnvSettings(); }
+    if (name === 'dashboard') loadDashboardFrame();
+    if (name === 'apps') loadAppsTabs();
   };
   window.toggleSidebar = function(){
     document.getElementById('sidebar').classList.toggle('open');
@@ -1403,6 +1604,258 @@ const htmlContent = `<!DOCTYPE html>
     });
   };
 
+  window.controlSingbox = function(action){
+    api('/api/singbox/' + action, {}).then(function(data){
+      showMessage(data.message || ('sing-box ' + action), 'success');
+      loadStatus();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  // -----------------------------------------------------------------
+  // Cloudflare Tunnel
+  // -----------------------------------------------------------------
+  window.updateCloudflareModeUI = function(){
+    var mode = document.getElementById('cfMode').value;
+    document.getElementById('cfFieldsApiToken').style.display = (mode === 'api_token') ? 'flex' : 'none';
+    document.getElementById('cfFieldsTunnelToken').style.display = (mode === 'tunnel_token') ? 'flex' : 'none';
+  };
+
+  async function loadCloudflareSettings(){
+    try {
+      var res = await fetch('/api/cloudflare/settings');
+      var data = await res.json();
+      var box = document.getElementById('cfStatus');
+      box.innerHTML = '';
+      box.appendChild(statCard('Mode', data.mode || 'not configured'));
+      box.appendChild(statCard('Running', data.running ? 'Yes' : 'No', data.running ? 'var(--success)' : 'var(--danger)'));
+      if (data.mode) document.getElementById('cfMode').value = data.mode;
+      updateCloudflareModeUI();
+      if (data.zone_name) document.getElementById('cfZoneName').value = data.zone_name;
+
+      var routesBox = document.getElementById('cfRoutes');
+      routesBox.innerHTML = '';
+      var urls = [];
+      if (data.routes && data.routes.length){
+        urls = data.routes.map(function(h){ return 'https://' + h; });
+      } else if (data.quick_tunnel_urls){
+        urls = Object.keys(data.quick_tunnel_urls).map(function(k){ return k + ': ' + data.quick_tunnel_urls[k]; });
+      }
+      if (urls.length){
+        var list = document.createElement('div');
+        list.className = 'hint';
+        list.innerHTML = 'Public URLs:<br>' + urls.map(function(u){ return '<span class="mono">' + u + '</span>'; }).join('<br>');
+        routesBox.appendChild(list);
+      }
+    } catch (err){
+      showMessage('Failed to load Cloudflare settings: ' + err.message, 'danger');
+    }
+  }
+  window.loadCloudflareSettings = loadCloudflareSettings;
+
+  window.saveCloudflareSettings = function(){
+    var body = {
+      mode: document.getElementById('cfMode').value,
+      api_token: document.getElementById('cfApiToken').value,
+      zone_name: document.getElementById('cfZoneName').value.trim(),
+      tunnel_token: document.getElementById('cfTunnelToken').value
+    };
+    api('/api/cloudflare/settings', body).then(function(data){
+      showMessage(data.message || 'Saved', 'success');
+      document.getElementById('cfApiToken').value = '';
+      document.getElementById('cfTunnelToken').value = '';
+      loadCloudflareSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  window.controlCloudflare = function(action){
+    showMessage('Cloudflare tunnel: ' + action + '…', 'success');
+    api('/api/cloudflare/' + action, {}).then(function(data){
+      showMessage(data.message || action, 'success');
+      loadCloudflareSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  // -----------------------------------------------------------------
+  // Docker web apps (zai/grok/deepseek/...): Settings CRUD + Apps tabs
+  // -----------------------------------------------------------------
+  async function loadDockerServices(){
+    try {
+      var res = await fetch('/api/docker_services');
+      var data = await res.json();
+      var body = document.getElementById('dockerServicesBody');
+      if (!body) return data.services || [];
+      var services = data.services || [];
+      if (!services.length){
+        body.innerHTML = '<tr class="empty-row"><td colspan="3">No Docker web apps added yet.</td></tr>';
+        return services;
+      }
+      body.innerHTML = '';
+      services.forEach(function(s){
+        var tr = document.createElement('tr');
+        var tdName = document.createElement('td'); tdName.textContent = s.name;
+        var tdPort = document.createElement('td'); tdPort.className = 'mono'; tdPort.textContent = s.port;
+        var tdAct = document.createElement('td');
+        var delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-danger btn-sm';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = function(){
+          askConfirm('Remove ' + s.name + '?', 'This removes its Apps tab and (if Full API Token mode is on) its public route.', function(){
+            api('/api/delete_docker_service', { name: s.name }).then(function(data){
+              showMessage(data.message || 'Removed', 'success');
+              loadDockerServices();
+            }).catch(function(err){ showMessage(err.message, 'danger'); });
+          });
+        };
+        tdAct.appendChild(delBtn);
+        tr.appendChild(tdName); tr.appendChild(tdPort); tr.appendChild(tdAct);
+        body.appendChild(tr);
+      });
+      return services;
+    } catch (err){
+      showMessage('Failed to load Docker web apps: ' + err.message, 'danger');
+      return [];
+    }
+  }
+  window.loadDockerServices = loadDockerServices;
+
+  window.addDockerService = function(){
+    var name = document.getElementById('dsName').value.trim().toLowerCase();
+    var port = parseInt(document.getElementById('dsPort').value, 10);
+    if (!name){ showMessage('Name is required', 'danger'); return; }
+    if (isNaN(port) || port < 1 || port > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
+    api('/api/add_docker_service', { name: name, port: port }).then(function(data){
+      showMessage(data.message || 'Added', 'success');
+      document.getElementById('dsName').value = '';
+      document.getElementById('dsPort').value = '';
+      loadDockerServices();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  var appsFrameTimeout = null;
+  async function loadAppsTabs(){
+    var services = await loadDockerServices();
+    document.getElementById('countApps').textContent = services.length;
+    var tabsBox = document.getElementById('appsTabs');
+    var emptyBox = document.getElementById('appsEmpty');
+    var frameWrap = document.getElementById('appsFrameWrap');
+    tabsBox.innerHTML = '';
+    if (!services.length){
+      emptyBox.style.display = '';
+      frameWrap.style.display = 'none';
+      return;
+    }
+    emptyBox.style.display = 'none';
+    frameWrap.style.display = '';
+    services.forEach(function(s, idx){
+      var btn = document.createElement('button');
+      btn.className = 'btn btn-ghost btn-sm' + (idx === 0 ? ' active' : '');
+      btn.textContent = s.name;
+      btn.onclick = function(){
+        document.querySelectorAll('#appsTabs .btn').forEach(function(b){ b.classList.remove('active'); });
+        btn.classList.add('active');
+        showAppFrame(s);
+      };
+      tabsBox.appendChild(btn);
+    });
+    showAppFrame(services[0]);
+  }
+  window.loadAppsTabs = loadAppsTabs;
+
+  function showAppFrame(service){
+    var frame = document.getElementById('appsFrame');
+    var url = 'http://' + window.location.hostname + ':' + service.port + (service.path || '/');
+    frame.src = url;
+  }
+
+  // -----------------------------------------------------------------
+  // Dashboard (metacubexd): self-hosted via sing-box external_ui first,
+  // falls back to the public metacubexd.pages.dev build if unreachable.
+  // -----------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Advanced (env-derived) settings
+  // -----------------------------------------------------------------
+  var envSettingLabels = {
+    BIND_ADDR: 'Bind address (needs manager restart)',
+    API_PORT: 'API port (needs manager restart)',
+    SINGBOX_PATH: 'sing-box binary path override',
+    SINGBOX_VERSION: 'sing-box default version',
+    SINGBOX_INSTALL_DIR: 'sing-box install directory',
+    SINGBOX_NO_AUTO_DOWNLOAD: 'Disable sing-box auto-download (set to "1")',
+    CLOUDFLARED_PATH: 'cloudflared binary path override',
+    CLOUDFLARED_INSTALL_DIR: 'cloudflared install directory'
+  };
+  async function loadEnvSettings(){
+    try {
+      var res = await fetch('/api/settings/env');
+      var data = await res.json();
+      var box = document.getElementById('envSettingsBody');
+      box.innerHTML = '';
+      Object.keys(envSettingLabels).forEach(function(key){
+        var s = (data.settings && data.settings[key]) || {};
+        var row = document.createElement('div');
+        row.className = 'field';
+        row.style.marginBottom = '10px';
+        var label = document.createElement('label');
+        label.textContent = envSettingLabels[key];
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.id = 'env_' + key;
+        input.value = s.value || '';
+        input.placeholder = s.env_value_present ? '(set via environment variable)' : '';
+        row.appendChild(label);
+        row.appendChild(input);
+        box.appendChild(row);
+      });
+    } catch (err){
+      showMessage('Failed to load advanced settings: ' + err.message, 'danger');
+    }
+  }
+  window.loadEnvSettings = loadEnvSettings;
+
+  window.saveEnvSettings = function(){
+    var body = {};
+    Object.keys(envSettingLabels).forEach(function(key){
+      var input = document.getElementById('env_' + key);
+      if (input) body[key] = input.value;
+    });
+    api('/api/settings/env/update', body).then(function(data){
+      showMessage(data.message || 'Saved', 'success');
+      loadEnvSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  function loadDashboardFrame(){
+    var frame = document.getElementById('dashboardFrame');
+    var host = window.location.hostname;
+    var port = '9090', secret = '';
+    if (lastTemplate){
+      try {
+        var clash = lastTemplate.experimental.clash_api;
+        if (clash.external_controller) port = clash.external_controller.split(':').pop();
+        if (clash.secret) secret = clash.secret;
+      } catch (e){ /* template not loaded yet, use defaults */ }
+    }
+    var localUrl = 'http://' + host + ':' + port + '/ui/';
+    var fallbackUrl = 'https://metacubexd.pages.dev/#/setup?hostname=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port) + '&secret=' + encodeURIComponent(secret);
+
+    var fallbackTimer = setTimeout(function(){
+      showMessage('Local dashboard not reachable yet, falling back to metacubexd.pages.dev', 'success');
+      frame.src = fallbackUrl;
+    }, 4000);
+    frame.onload = function(){ clearTimeout(fallbackTimer); };
+    frame.src = localUrl;
+  }
+
 })();
 </script>
 </body>
@@ -1460,10 +1913,45 @@ func writeJSONAtomic(filename string, data interface{}) error {
 // state.json — متادیتای داخلی خود مدیر (کدام گروه WARP پیش‌فرض است و غیره).
 // این فایل هرگز به sing-box داده نمی‌شود، فقط برای منطق داخلی برنامه است.
 // ---------------------------------------------------------------------
+// DockerService یک وب‌سرویس جدا (کانتینر Docker با یک فرانت وب، مثل zai/grok/deepseek)
+// را نشان می‌دهد که هم به‌صورت iframe در پنل نمایش داده می‌شود و هم (در حالت api_token)
+// یک ساب‌دامین عمومی از طریق تونل Cloudflare می‌گیرد.
+type DockerService struct {
+	Name string `json:"name"`           // اسم/ساب‌دامین، مثل "zai"
+	Port int    `json:"port"`           // پورتی که کانتینر روی هاست منتشر کرده، مثل 3000
+	Path string `json:"path,omitempty"` // مسیر اختیاری، پیش‌فرض "/"
+}
+
+// CloudflareConfig تنظیمات تونل Cloudflare را نگه می‌دارد. سه حالت پشتیبانی می‌شود:
+//   - api_token: کاربر یک API Token کامل (Tunnel:Edit + DNS:Edit) و یک دامنه‌ی خودش می‌دهد؛
+//     مدیر خودکار تونل را می‌سازد، ingress را بر اساس DockerServices/پنل/داشبورد تنظیم می‌کند
+//     و رکوردهای DNS را می‌سازد.
+//   - tunnel_token: کاربر فقط یک Tunnel Token (از یک تونل که خودش در داشبورد Cloudflare
+//     ساخته و route هایش را دستی تنظیم کرده) می‌دهد؛ مدیر فقط cloudflared را اجرا می‌کند.
+//   - quick: کاربر هیچ‌کدام را ندارد؛ از Quick Tunnel رایگان *.trycloudflare.com استفاده
+//     می‌شود (بدون نیاز به اکانت/دامنه)، فقط برای پنل مدیریت و داشبورد Clash.
+type CloudflareConfig struct {
+	Mode        string `json:"mode,omitempty"` // "api_token" | "tunnel_token" | "quick"
+	APIToken    string `json:"api_token,omitempty"`
+	ZoneName    string `json:"zone_name,omitempty"`
+	ZoneID      string `json:"zone_id,omitempty"`
+	AccountID   string `json:"account_id,omitempty"`
+	TunnelToken string `json:"tunnel_token,omitempty"`
+	TunnelID    string `json:"tunnel_id,omitempty"`
+	TunnelName  string `json:"tunnel_name,omitempty"`
+}
+
 type AppState struct {
 	DefaultWarpGroup string `json:"default_warp_group"`
 	// AdminToken در صورت تنظیم از صفحه‌ی Settings، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	AdminToken string `json:"admin_token,omitempty"`
+	// Cloudflare تنظیمات تونل (هر سه حالت) را نگه می‌دارد.
+	Cloudflare CloudflareConfig `json:"cloudflare,omitempty"`
+	// DockerServices فهرست وب‌سرویس‌های جدا (zai/grok/deepseek و غیره) برای iframe + تونل.
+	DockerServices []DockerService `json:"docker_services,omitempty"`
+	// EnvOverrides مقادیر تنظیمات مبتنی‌بر env که از صفحه‌ی Settings تغییر داده شده‌اند
+	// (اولویت با این مقادیر است، سپس متغیر محیطی واقعی، سپس مقدار پیش‌فرض کد).
+	EnvOverrides map[string]string `json:"env_overrides,omitempty"`
 }
 
 func readStateOrDefault() AppState {
@@ -1506,7 +1994,9 @@ const minimalDefaultTemplate = `{
   },
   "experimental": {
     "clash_api": {
-      "external_controller": "127.0.0.1:9090",
+      "external_controller": "127.0.0.1:__CLASH_API_PORT__",
+      "external_ui": "ui",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.zip",
       "secret": "",
       "default_mode": "rule"
     }
@@ -1581,6 +2071,8 @@ const defaultTemplateRich = `{
       "access_control_allow_private_network": true,
       "default_mode": "rule",
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
+      "external_ui": "ui",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.zip",
       "secret": "__CLASH_SECRET__"
     }
   },
@@ -1896,7 +2388,7 @@ func locateSingBox() (string, error) {
 	}
 
 	// ۱. اگر صریحاً با متغیر محیطی مشخص شده باشد
-	if envPath := strings.TrimSpace(os.Getenv("SINGBOX_PATH")); envPath != "" {
+	if envPath := strings.TrimSpace(getSetting("SINGBOX_PATH", "")); envPath != "" {
 		if info, err := os.Stat(envPath); err == nil && !info.IsDir() {
 			log.Printf("Using sing-box from SINGBOX_PATH: %s", envPath)
 			return envPath, nil
@@ -2124,9 +2616,10 @@ func extractFromZip(data []byte, binName string) ([]byte, error) {
 	return nil, fmt.Errorf("%s not found inside the downloaded archive", binName)
 }
 
-// downloadAndExtractSingBox آرشیو asset را دانلود، باینری sing-box را از داخل آن
-// استخراج و در destPath (با مجوز اجرا) می‌نویسد.
-func downloadAndExtractSingBox(url, destPath string) error {
+// downloadAndExtractArchive یک آرشیو (.zip یا .tar.gz) را دانلود می‌کند، فایل binName
+// را از داخل آن استخراج و در destPath (با مجوز اجرا) می‌نویسد. برای sing-box و
+// cloudflared (نسخه‌ی macOS) هر دو استفاده می‌شود.
+func downloadAndExtractArchive(url, destPath, binName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), singBoxDownloadTimeout)
 	defer cancel()
 
@@ -2138,7 +2631,7 @@ func downloadAndExtractSingBox(url, destPath string) error {
 
 	resp, err := singBoxDownloadHTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to download sing-box: %w", err)
+		return fmt.Errorf("failed to download %s: %w", binName, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -2148,11 +2641,6 @@ func downloadAndExtractSingBox(url, destPath string) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read downloaded archive: %w", err)
-	}
-
-	binName := "sing-box"
-	if runtime.GOOS == "windows" {
-		binName = "sing-box.exe"
 	}
 
 	var binData []byte
@@ -2178,7 +2666,7 @@ func downloadAndExtractSingBox(url, destPath string) error {
 
 // singBoxInstallDir مسیری است که باینری دانلودشده‌ی sing-box در آن نوشته می‌شود.
 func singBoxInstallDir() string {
-	if dir := strings.TrimSpace(os.Getenv("SINGBOX_INSTALL_DIR")); dir != "" {
+	if dir := strings.TrimSpace(getSetting("SINGBOX_INSTALL_DIR", "")); dir != "" {
 		return dir
 	}
 	cwd, err := os.Getwd()
@@ -2192,7 +2680,7 @@ func singBoxInstallDir() string {
 // فعلی دانلود و نصب می‌کند، کش مسیر باینری را به‌روز می‌کند و مسیر نهایی را برمی‌گرداند.
 func downloadSingBox(version string) (string, error) {
 	if strings.TrimSpace(version) == "" {
-		version = getEnvDefault("SINGBOX_VERSION", defaultSingBoxVersion)
+		version = getSetting("SINGBOX_VERSION", defaultSingBoxVersion)
 	}
 
 	osToken, err := singBoxOSToken()
@@ -2215,7 +2703,7 @@ func downloadSingBox(version string) (string, error) {
 	destPath := filepath.Join(singBoxInstallDir(), binName)
 
 	log.Printf("Downloading sing-box %s (%s) from %s", rel.TagName, asset.Name, asset.BrowserDownloadURL)
-	if err := downloadAndExtractSingBox(asset.BrowserDownloadURL, destPath); err != nil {
+	if err := downloadAndExtractArchive(asset.BrowserDownloadURL, destPath, binName); err != nil {
 		return "", err
 	}
 	log.Printf("sing-box %s installed at %s", rel.TagName, destPath)
@@ -2231,13 +2719,13 @@ func downloadSingBox(version string) (string, error) {
 // روی سیستم پیدا نشود، تلاش می‌کند نسخه‌ی پیش‌فرض (یا SINGBOX_VERSION) را خودکار
 // دانلود کند. با SINGBOX_NO_AUTO_DOWNLOAD=1 می‌توان این رفتار را غیرفعال کرد.
 func autoDownloadSingBoxIfMissing() {
-	if strings.TrimSpace(os.Getenv("SINGBOX_NO_AUTO_DOWNLOAD")) != "" {
+	if strings.TrimSpace(getSetting("SINGBOX_NO_AUTO_DOWNLOAD", "")) != "" {
 		return
 	}
 	if _, err := findSingBox(); err == nil {
 		return
 	}
-	version := getEnvDefault("SINGBOX_VERSION", defaultSingBoxVersion)
+	version := getSetting("SINGBOX_VERSION", defaultSingBoxVersion)
 	log.Printf("sing-box executable not found — attempting automatic download of %s for %s/%s", version, runtime.GOOS, runtime.GOARCH)
 	if _, err := downloadSingBox(version); err != nil {
 		log.Printf("automatic sing-box download failed: %v (retry from the Settings page, install it manually, or set SINGBOX_PATH)", err)
@@ -2317,6 +2805,632 @@ func restartSingBox() error {
 	}
 	runningSingBox = mp
 	return nil
+}
+
+// ---------------------------------------------------------------------
+// دانلود خودکار باینری cloudflared (الگوی مشابه دانلود sing-box، اما نام‌گذاری
+// assetهای cloudflared فرق دارد: لینوکس/ویندوز باینری خام هستند، macOS در tar.gz)
+// ---------------------------------------------------------------------
+const (
+	cloudflaredRepoAPI     = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest"
+	cloudflaredStopTimeout = 10 * time.Second
+)
+
+// cloudflaredAssetName نام asset مناسب سیستم‌عامل/معماری فعلی را در ریلیزهای
+// cloudflared برمی‌گرداند (بر اساس الگوی نام‌گذاری رسمی این پروژه).
+func cloudflaredAssetName() (name string, isArchive bool, err error) {
+	switch runtime.GOOS {
+	case "linux":
+		switch runtime.GOARCH {
+		case "amd64":
+			return "cloudflared-linux-amd64", false, nil
+		case "arm64":
+			return "cloudflared-linux-arm64", false, nil
+		case "386":
+			return "cloudflared-linux-386", false, nil
+		case "arm":
+			return "cloudflared-linux-arm", false, nil
+		}
+	case "windows":
+		switch runtime.GOARCH {
+		case "amd64":
+			return "cloudflared-windows-amd64.exe", false, nil
+		case "386":
+			return "cloudflared-windows-386.exe", false, nil
+		}
+	case "darwin":
+		switch runtime.GOARCH {
+		case "amd64":
+			return "cloudflared-darwin-amd64.tgz", true, nil
+		case "arm64":
+			return "cloudflared-darwin-arm64.tgz", true, nil
+		}
+	}
+	return "", false, fmt.Errorf("automatic cloudflared download is not supported on %s/%s — install it manually", runtime.GOOS, runtime.GOARCH)
+}
+
+func cloudflaredInstallDir() string {
+	if dir := strings.TrimSpace(getSetting("CLOUDFLARED_INSTALL_DIR", "")); dir != "" {
+		return dir
+	}
+	return singBoxInstallDir() // همان دایرکتوری bin استفاده‌شده برای sing-box
+}
+
+// downloadCloudflared آخرین نسخه‌ی cloudflared را برای سیستم‌عامل/معماری فعلی
+// دانلود می‌کند. لینوکس/ویندوز باینری خام‌اند، macOS داخل tar.gz است.
+func downloadCloudflared() (string, error) {
+	assetName, isArchive, err := cloudflaredAssetName()
+	if err != nil {
+		return "", err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), singBoxAPITimeout)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cloudflaredRepoAPI, nil)
+	if err != nil {
+		cancel()
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "sb-manager")
+	resp, err := singBoxDownloadHTTPClient.Do(req)
+	cancel()
+	if err != nil {
+		return "", fmt.Errorf("failed to reach GitHub: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, string(body))
+	}
+	var rel githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("failed to decode GitHub response: %w", err)
+	}
+
+	var asset *githubReleaseAsset
+	for i := range rel.Assets {
+		if rel.Assets[i].Name == assetName {
+			asset = &rel.Assets[i]
+			break
+		}
+	}
+	if asset == nil {
+		return "", fmt.Errorf("asset %q not found in cloudflared release %s", assetName, rel.TagName)
+	}
+
+	binName := "cloudflared"
+	if runtime.GOOS == "windows" {
+		binName = "cloudflared.exe"
+	}
+	destPath := filepath.Join(cloudflaredInstallDir(), binName)
+
+	log.Printf("Downloading cloudflared %s (%s) from %s", rel.TagName, asset.Name, asset.BrowserDownloadURL)
+
+	if !isArchive {
+		// لینوکس/ویندوز: باینری خام است، مستقیم دانلود و ذخیره می‌شود.
+		dctx, dcancel := context.WithTimeout(context.Background(), singBoxDownloadTimeout)
+		defer dcancel()
+		dreq, err := http.NewRequestWithContext(dctx, http.MethodGet, asset.BrowserDownloadURL, nil)
+		if err != nil {
+			return "", err
+		}
+		dreq.Header.Set("User-Agent", "sb-manager")
+		dresp, err := singBoxDownloadHTTPClient.Do(dreq)
+		if err != nil {
+			return "", fmt.Errorf("failed to download cloudflared: %w", err)
+		}
+		defer dresp.Body.Close()
+		if dresp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("download failed with status %d", dresp.StatusCode)
+		}
+		body, err := io.ReadAll(dresp.Body)
+		if err != nil {
+			return "", fmt.Errorf("failed to read download: %w", err)
+		}
+		if dir := filepath.Dir(destPath); dir != "" {
+			_ = os.MkdirAll(dir, 0755)
+		}
+		if err := atomicWriteFile(destPath, body, 0755); err != nil {
+			return "", fmt.Errorf("failed to write cloudflared binary: %w", err)
+		}
+	} else {
+		// macOS: asset یک tar.gz حاوی باینری cloudflared است.
+		if err := downloadAndExtractArchive(asset.BrowserDownloadURL, destPath, binName); err != nil {
+			return "", err
+		}
+	}
+
+	log.Printf("cloudflared %s installed at %s", rel.TagName, destPath)
+	cloudflaredPathMu.Lock()
+	cloudflaredPathCache = destPath
+	cloudflaredPathMu.Unlock()
+	return destPath, nil
+}
+
+var (
+	cloudflaredPathCache string
+	cloudflaredPathMu    sync.Mutex
+)
+
+// findCloudflared مسیر باینری cloudflared را جستجو می‌کند (کش، CLOUDFLARED_PATH، PATH،
+// دایرکتوری کاری، و مسیرهای رایج نصب) — دقیقاً هم‌الگو با findSingBox.
+func findCloudflared() (string, error) {
+	cloudflaredPathMu.Lock()
+	defer cloudflaredPathMu.Unlock()
+
+	if cloudflaredPathCache != "" {
+		if info, err := os.Stat(cloudflaredPathCache); err == nil && !info.IsDir() {
+			return cloudflaredPathCache, nil
+		}
+		cloudflaredPathCache = ""
+	}
+
+	if envPath := strings.TrimSpace(getSetting("CLOUDFLARED_PATH", "")); envPath != "" {
+		if info, err := os.Stat(envPath); err == nil && !info.IsDir() {
+			cloudflaredPathCache = envPath
+			return envPath, nil
+		}
+	}
+
+	binName := "cloudflared"
+	if runtime.GOOS == "windows" {
+		binName = "cloudflared.exe"
+	}
+	if p, err := exec.LookPath(binName); err == nil {
+		cloudflaredPathCache = p
+		return p, nil
+	}
+	candidates := []string{
+		filepath.Join(cloudflaredInstallDir(), binName),
+		"./" + binName,
+		"/usr/local/bin/" + binName,
+		"/usr/bin/" + binName,
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			cloudflaredPathCache = c
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("cloudflared executable not found (checked PATH, working directory, and common install paths)")
+}
+
+// ---------------------------------------------------------------------
+// کلاینت Cloudflare API (حالت api_token): resolve zone/account، ساخت تونل،
+// گرفتن run-token، push کردن ingress، و ساخت رکورد DNS.
+// ---------------------------------------------------------------------
+const cfAPIBase = "https://api.cloudflare.com/client/v4"
+
+var cfHTTPClient = &http.Client{Timeout: 20 * time.Second}
+
+func cfAPIRequest(token, method, path string, body interface{}) (map[string]interface{}, error) {
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(b)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, cfAPIBase+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := cfHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach Cloudflare API: %w", err)
+	}
+	defer resp.Body.Close()
+	var parsed map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, fmt.Errorf("failed to decode Cloudflare API response: %w", err)
+	}
+	if ok, _ := parsed["success"].(bool); !ok {
+		return parsed, fmt.Errorf("Cloudflare API error (status %d): %v", resp.StatusCode, parsed["errors"])
+	}
+	return parsed, nil
+}
+
+// cfResolveZone نام دامنه را به zone_id و account_id آن تبدیل می‌کند.
+func cfResolveZone(token, zoneName string) (zoneID, accountID string, err error) {
+	res, err := cfAPIRequest(token, http.MethodGet, "/zones?name="+strings.TrimSpace(zoneName), nil)
+	if err != nil {
+		return "", "", err
+	}
+	results, _ := res["result"].([]interface{})
+	if len(results) == 0 {
+		return "", "", fmt.Errorf("zone %q not found in this Cloudflare account (check the domain name and API Token permissions)", zoneName)
+	}
+	zone, _ := results[0].(map[string]interface{})
+	zoneID, _ = zone["id"].(string)
+	account, _ := zone["account"].(map[string]interface{})
+	accountID, _ = account["id"].(string)
+	if zoneID == "" || accountID == "" {
+		return "", "", fmt.Errorf("could not determine zone/account id for %q", zoneName)
+	}
+	return zoneID, accountID, nil
+}
+
+// cfEnsureTunnel یک تونل remotely-managed می‌سازد (یا اگر از قبل در state.json ذخیره
+// شده، از همان استفاده می‌کند) و run-token آن را برمی‌گرداند.
+func cfEnsureTunnel(token, accountID string, existing CloudflareConfig) (tunnelID, tunnelToken string, err error) {
+	if existing.TunnelID != "" {
+		// تونل قبلاً ساخته شده؛ فقط توکن اجرا را دوباره می‌گیریم (ممکن است چرخیده باشد).
+		res, terr := cfAPIRequest(token, http.MethodGet, "/accounts/"+accountID+"/cfd_tunnel/"+existing.TunnelID+"/token", nil)
+		if terr == nil {
+			if tok, ok := res["result"].(string); ok && tok != "" {
+				return existing.TunnelID, tok, nil
+			}
+		}
+		log.Printf("cfEnsureTunnel: could not reuse existing tunnel %s (%v), creating a new one", existing.TunnelID, terr)
+	}
+
+	name := existing.TunnelName
+	if name == "" {
+		name = "sb-manager"
+	}
+	created, err := cfAPIRequest(token, http.MethodPost, "/accounts/"+accountID+"/cfd_tunnel", map[string]interface{}{
+		"name":       name,
+		"config_src": "cloudflare", // یعنی ingress از طریق API مدیریت می‌شود، نه فایل محلی
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create tunnel: %w", err)
+	}
+	result, _ := created["result"].(map[string]interface{})
+	tunnelID, _ = result["id"].(string)
+	if tunnelID == "" {
+		return "", "", fmt.Errorf("tunnel creation response did not include an id")
+	}
+
+	tokRes, err := cfAPIRequest(token, http.MethodGet, "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/token", nil)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch tunnel run-token: %w", err)
+	}
+	tunnelToken, _ = tokRes["result"].(string)
+	if tunnelToken == "" {
+		return "", "", fmt.Errorf("tunnel token response was empty")
+	}
+	return tunnelID, tunnelToken, nil
+}
+
+// ingressRoute یک قانون ingress در تونل Cloudflare (هاست‌نیم عمومی → آدرس محلی).
+type ingressRoute struct {
+	Hostname string
+	Service  string
+}
+
+// getClashAPIAddr آدرس external_controller فعلی را از template.json می‌خواند
+// (به‌جای هاردکد 9090)، تا داشبورد Clash همیشه پورت درست را تونل کند.
+func getClashAPIAddr() (string, error) {
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		return "127.0.0.1:9090", nil // fallback به پیش‌فرض اگر template.json هنوز آماده نیست
+	}
+	exp, _ := tmpl["experimental"].(map[string]interface{})
+	if exp == nil {
+		return "127.0.0.1:9090", nil
+	}
+	clash, _ := exp["clash_api"].(map[string]interface{})
+	if clash == nil {
+		return "127.0.0.1:9090", nil
+	}
+	if addr, ok := clash["external_controller"].(string); ok && addr != "" {
+		return addr, nil
+	}
+	return "127.0.0.1:9090", nil
+}
+
+// computeTunnelRoutes فهرست ingress را می‌سازد: پنل مدیریت + داشبورد Clash + همه‌ی
+// DockerServiceها (zai/grok/deepseek و غیره). عمداً پروکسی‌های جدول Services
+// (سینگ‌باکس mixed inbound) اینجا نیستند — طبق تصمیم صریح شما فقط پروکسی‌ها private می‌مانند.
+func computeTunnelRoutes(state AppState) []ingressRoute {
+	domain := strings.TrimSuffix(strings.TrimSpace(state.Cloudflare.ZoneName), ".")
+	if domain == "" {
+		return nil
+	}
+	routes := []ingressRoute{
+		{Hostname: "panel." + domain, Service: "http://127.0.0.1" + apiPort},
+	}
+	if clashAddr, err := getClashAPIAddr(); err == nil {
+		routes = append(routes, ingressRoute{Hostname: "dash." + domain, Service: "http://" + clashAddr})
+	}
+	for _, s := range state.DockerServices {
+		routes = append(routes, ingressRoute{
+			Hostname: s.Name + "." + domain,
+			Service:  fmt.Sprintf("http://127.0.0.1:%d", s.Port),
+		})
+	}
+	return routes
+}
+
+// cfPushIngress قوانین ingress را روی تونل remotely-managed تنظیم می‌کند.
+func cfPushIngress(token, accountID, tunnelID string, routes []ingressRoute) error {
+	ingress := make([]map[string]interface{}, 0, len(routes)+1)
+	for _, r := range routes {
+		ingress = append(ingress, map[string]interface{}{"hostname": r.Hostname, "service": r.Service})
+	}
+	ingress = append(ingress, map[string]interface{}{"service": "http_status:404"}) // catch-all اجباری
+	_, err := cfAPIRequest(token, http.MethodPut, "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", map[string]interface{}{
+		"config": map[string]interface{}{"ingress": ingress},
+	})
+	return err
+}
+
+// cfUpsertDNS برای هر route یک رکورد CNAME به‌سمت <tunnel_id>.cfargotunnel.com می‌سازد
+// (اگر از قبل رکوردی با همان اسم باشد، آن را به‌روزرسانی می‌کند).
+func cfUpsertDNS(token, zoneID, tunnelID string, routes []ingressRoute) error {
+	target := tunnelID + ".cfargotunnel.com"
+	for _, r := range routes {
+		existing, err := cfAPIRequest(token, http.MethodGet, "/zones/"+zoneID+"/dns_records?type=CNAME&name="+r.Hostname, nil)
+		if err != nil {
+			log.Printf("cfUpsertDNS: failed to look up %s: %v", r.Hostname, err)
+			continue
+		}
+		results, _ := existing["result"].([]interface{})
+		body := map[string]interface{}{"type": "CNAME", "name": r.Hostname, "content": target, "proxied": true, "ttl": 1}
+		if len(results) > 0 {
+			rec, _ := results[0].(map[string]interface{})
+			recID, _ := rec["id"].(string)
+			if _, err := cfAPIRequest(token, http.MethodPut, "/zones/"+zoneID+"/dns_records/"+recID, body); err != nil {
+				log.Printf("cfUpsertDNS: failed to update %s: %v", r.Hostname, err)
+			}
+			continue
+		}
+		if _, err := cfAPIRequest(token, http.MethodPost, "/zones/"+zoneID+"/dns_records", body); err != nil {
+			log.Printf("cfUpsertDNS: failed to create %s: %v", r.Hostname, err)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// مدیریت پروسه‌ی cloudflared (سه حالت: api_token / tunnel_token / quick)
+// ---------------------------------------------------------------------
+var (
+	cfCmdMu          sync.Mutex
+	runningCF        *managedProcess
+	cfQuickURLsMu    sync.RWMutex
+	cfQuickURLs      = map[string]string{} // label -> https://xxxx.trycloudflare.com
+	cfQuickProcesses []*managedProcess
+)
+
+// startCloudflaredWithToken یک تونل remotely-managed (api_token یا tunnel_token) را
+// اجرا می‌کند. توکن عمداً به‌جای آرگومان CLI (که با ps قابل‌دیدن است) از طریق
+// متغیر محیطی TUNNEL_TOKEN که خود cloudflared پشتیبانی می‌کند پاس داده می‌شود.
+func startCloudflaredWithToken(path, token string) (*managedProcess, error) {
+	cmd := exec.Command(path, "tunnel", "--no-autoupdate", "run")
+	cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+token)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start cloudflared: %w", err)
+	}
+	mp := &managedProcess{cmd: cmd, done: make(chan struct{})}
+	go func() { mp.err = cmd.Wait(); close(mp.done) }()
+	log.Printf("cloudflared started (pid=%d)", cmd.Process.Pid)
+	return mp, nil
+}
+
+// startQuickTunnel یک Quick Tunnel رایگان (بدون نیاز به اکانت/دامنه) برای یک آدرس
+// محلی اجرا می‌کند و هاست‌نیم *.trycloudflare.com اختصاص‌یافته را از لاگ آن استخراج می‌کند.
+func startQuickTunnel(path, target string) (*managedProcess, string, error) {
+	cmd := exec.Command(path, "tunnel", "--no-autoupdate", "--url", target)
+	cmd.Env = os.Environ()
+	var logBuf bytes.Buffer
+	logMu := &sync.Mutex{}
+	writer := &syncedBufferWriter{buf: &logBuf, mu: logMu}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := cmd.Start(); err != nil {
+		return nil, "", fmt.Errorf("failed to start quick tunnel: %w", err)
+	}
+	mp := &managedProcess{cmd: cmd, done: make(chan struct{})}
+	go func() { mp.err = cmd.Wait(); close(mp.done) }()
+
+	re := regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		logMu.Lock()
+		snapshot := logBuf.String()
+		logMu.Unlock()
+		if m := re.FindString(snapshot); m != "" {
+			return mp, m, nil
+		}
+		select {
+		case <-mp.done:
+			return nil, "", fmt.Errorf("cloudflared exited before a tunnel URL was assigned")
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	return mp, "", fmt.Errorf("timed out waiting for a trycloudflare.com URL to be assigned")
+}
+
+// syncedBufferWriter یک io.Writer ساده و thread-safe برای گرفتن لاگ‌های cloudflared است.
+type syncedBufferWriter struct {
+	buf *bytes.Buffer
+	mu  *sync.Mutex
+}
+
+func (w *syncedBufferWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func stopCloudflared() {
+	cfCmdMu.Lock()
+	defer cfCmdMu.Unlock()
+	if runningCF != nil {
+		stopProcessWithTimeout(runningCF, cloudflaredStopTimeout, "cloudflared")
+		runningCF = nil
+	}
+	for _, mp := range cfQuickProcesses {
+		stopProcessWithTimeout(mp, cloudflaredStopTimeout, "cloudflared (quick tunnel)")
+	}
+	cfQuickProcesses = nil
+	cfQuickURLsMu.Lock()
+	cfQuickURLs = map[string]string{}
+	cfQuickURLsMu.Unlock()
+}
+
+// stopProcessWithTimeout مثل stopProcess است اما پیام لاگ آن قابل‌تنظیم است (برای
+// تمایز sing-box از cloudflared در لاگ‌ها).
+func stopProcessWithTimeout(mp *managedProcess, timeout time.Duration, label string) {
+	if mp == nil || mp.cmd == nil || mp.cmd.Process == nil {
+		return
+	}
+	_ = mp.cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-mp.done:
+	case <-time.After(timeout):
+		log.Printf("%s did not exit within %s, killing it", label, timeout)
+		_ = mp.cmd.Process.Kill()
+		<-mp.done
+	}
+}
+
+// startCloudflareTunnel نقطه‌ی ورود اصلی است: بر اساس Mode تنظیم‌شده، یکی از سه
+// مسیر (api_token / tunnel_token / quick) را اجرا می‌کند.
+func startCloudflareTunnel() error {
+	cfCmdMu.Lock()
+	defer cfCmdMu.Unlock()
+
+	stopCloudflared_locked()
+
+	state := readStateOrDefault()
+	cfg := state.Cloudflare
+	if cfg.Mode == "" {
+		return fmt.Errorf("Cloudflare tunnel is not configured yet — set it up from the Settings page")
+	}
+
+	path, err := findCloudflared()
+	if err != nil {
+		log.Println("cloudflared not found — attempting automatic download")
+		if path, err = downloadCloudflared(); err != nil {
+			return fmt.Errorf("cloudflared is not installed and automatic download failed: %w", err)
+		}
+	}
+
+	switch cfg.Mode {
+	case "api_token":
+		if cfg.APIToken == "" || cfg.ZoneName == "" {
+			return fmt.Errorf("api_token mode requires both an API Token and a domain (zone)")
+		}
+		zoneID, accountID := cfg.ZoneID, cfg.AccountID
+		if zoneID == "" || accountID == "" {
+			zoneID, accountID, err = cfResolveZone(cfg.APIToken, cfg.ZoneName)
+			if err != nil {
+				return err
+			}
+			cfg.ZoneID, cfg.AccountID = zoneID, accountID
+		}
+		tunnelID, tunnelToken, err := cfEnsureTunnel(cfg.APIToken, accountID, cfg)
+		if err != nil {
+			return err
+		}
+		cfg.TunnelID = tunnelID
+
+		routes := computeTunnelRoutes(state)
+		if err := cfPushIngress(cfg.APIToken, accountID, tunnelID, routes); err != nil {
+			return fmt.Errorf("failed to push ingress config: %w", err)
+		}
+		if err := cfUpsertDNS(cfg.APIToken, zoneID, tunnelID, routes); err != nil {
+			log.Printf("startCloudflareTunnel: DNS sync had errors (continuing): %v", err)
+		}
+
+		// state (zone_id/account_id/tunnel_id تازه‌کشف‌شده) را ذخیره می‌کنیم.
+		state.Cloudflare = cfg
+		_ = writeState(state)
+
+		mp, err := startCloudflaredWithToken(path, tunnelToken)
+		if err != nil {
+			return err
+		}
+		runningCF = mp
+		log.Printf("Cloudflare tunnel running — %d public route(s) under %s", len(routes), cfg.ZoneName)
+
+	case "tunnel_token":
+		if cfg.TunnelToken == "" {
+			return fmt.Errorf("tunnel_token mode requires a Tunnel Token")
+		}
+		mp, err := startCloudflaredWithToken(path, cfg.TunnelToken)
+		if err != nil {
+			return err
+		}
+		runningCF = mp
+		log.Println("Cloudflare tunnel running (routes are managed manually in the Cloudflare dashboard)")
+
+	case "quick":
+		clashAddr, _ := getClashAPIAddr()
+		targets := map[string]string{
+			"panel": "http://127.0.0.1" + apiPort,
+			"dash":  "http://" + clashAddr,
+		}
+		newURLs := map[string]string{}
+		var procs []*managedProcess
+		for label, target := range targets {
+			mp, url, err := startQuickTunnel(path, target)
+			if err != nil {
+				log.Printf("startCloudflareTunnel: quick tunnel for %s failed: %v", label, err)
+				continue
+			}
+			procs = append(procs, mp)
+			newURLs[label] = url
+		}
+		if len(procs) == 0 {
+			return fmt.Errorf("failed to start any quick tunnel — check that cloudflared can reach the internet")
+		}
+		cfQuickProcesses = procs
+		cfQuickURLsMu.Lock()
+		cfQuickURLs = newURLs
+		cfQuickURLsMu.Unlock()
+		log.Printf("Quick tunnels running: %v (note: quick tunnels only support HTTP targets — Docker service routes need api_token mode)", newURLs)
+
+	default:
+		return fmt.Errorf("unknown Cloudflare tunnel mode %q", cfg.Mode)
+	}
+	return nil
+}
+
+// stopCloudflared_locked نسخه‌ی داخلی stopCloudflared است که فرض می‌کند cfCmdMu از
+// قبل قفل شده (برای فراخوانی از داخل startCloudflareTunnel).
+func stopCloudflared_locked() {
+	if runningCF != nil {
+		stopProcessWithTimeout(runningCF, cloudflaredStopTimeout, "cloudflared")
+		runningCF = nil
+	}
+	for _, mp := range cfQuickProcesses {
+		stopProcessWithTimeout(mp, cloudflaredStopTimeout, "cloudflared (quick tunnel)")
+	}
+	cfQuickProcesses = nil
+	cfQuickURLsMu.Lock()
+	cfQuickURLs = map[string]string{}
+	cfQuickURLsMu.Unlock()
+}
+
+// syncCloudflareRoutesAsync پس از تغییر DockerServices یا Services، در حالت api_token
+// ingress را در پس‌زمینه به‌روزرسانی می‌کند (بدون این‌که درخواست کاربر را بلاک کند).
+// در حالت‌های دیگر (یا وقتی تونل اصلاً روشن نیست) کاری انجام نمی‌دهد.
+func syncCloudflareRoutesAsync() {
+	go func() {
+		state := readStateOrDefault()
+		if state.Cloudflare.Mode != "api_token" || state.Cloudflare.APIToken == "" || state.Cloudflare.TunnelID == "" {
+			return
+		}
+		routes := computeTunnelRoutes(state)
+		if err := cfPushIngress(state.Cloudflare.APIToken, state.Cloudflare.AccountID, state.Cloudflare.TunnelID, routes); err != nil {
+			log.Printf("syncCloudflareRoutesAsync: failed to push updated ingress: %v", err)
+			return
+		}
+		if err := cfUpsertDNS(state.Cloudflare.APIToken, state.Cloudflare.ZoneID, state.Cloudflare.TunnelID, routes); err != nil {
+			log.Printf("syncCloudflareRoutesAsync: DNS sync had errors: %v", err)
+		}
+		log.Printf("Cloudflare ingress synced (%d routes) after a service change", len(routes))
+	}()
 }
 
 // ---------------------------------------------------------------------
@@ -3312,6 +4426,88 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Service %q updated", req.NewName)})
 }
 
+// ---------------------------------------------------------------------
+// وب‌سرویس‌های جدا (Docker): برای نمایش iframe در پنل + مسیر عمومی تونل Cloudflare.
+// اینها مستقل از جدول Services (پروکسی‌های sing-box) هستند و خودشان یک فرانت وب دارند.
+// ---------------------------------------------------------------------
+var dockerServiceNameRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+func dockerServicesHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	if state.DockerServices == nil {
+		state.DockerServices = []DockerService{}
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"services": state.DockerServices})
+}
+
+func addDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
+	var req DockerService
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
+	if !dockerServiceNameRe.MatchString(req.Name) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Name must be 1-32 lowercase letters/digits/hyphens (used as a subdomain)"})
+		return
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid port (1-65535)"})
+		return
+	}
+	if req.Path == "" {
+		req.Path = "/"
+	}
+
+	state := readStateOrDefault()
+	for _, s := range state.DockerServices {
+		if s.Name == req.Name {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("A docker service named %q already exists", req.Name)})
+			return
+		}
+	}
+	state.DockerServices = append(state.DockerServices, req)
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+	syncCloudflareRoutesAsync()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q added", req.Name)})
+}
+
+func deleteDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(req.Name))
+
+	state := readStateOrDefault()
+	kept := state.DockerServices[:0]
+	found := false
+	for _, s := range state.DockerServices {
+		if s.Name == name {
+			found = true
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if !found {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Docker service %q not found", name)})
+		return
+	}
+	state.DockerServices = kept
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+	syncCloudflareRoutesAsync()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q removed", name)})
+}
+
 // settingsHandler وضعیت کلی تنظیمات قابل‌مدیریت از UI را برمی‌گرداند.
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
@@ -3356,7 +4552,7 @@ func singboxInfoHandler(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"found":           err == nil,
 		"path":            path,
-		"default_version": getEnvDefault("SINGBOX_VERSION", defaultSingBoxVersion),
+		"default_version": getSetting("SINGBOX_VERSION", defaultSingBoxVersion),
 		"os":              runtime.GOOS,
 		"arch":            runtime.GOARCH,
 	}
@@ -3380,7 +4576,7 @@ func singboxDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	version := strings.TrimSpace(req.Version)
 	if version == "" {
-		version = getEnvDefault("SINGBOX_VERSION", defaultSingBoxVersion)
+		version = getSetting("SINGBOX_VERSION", defaultSingBoxVersion)
 	}
 	path, err := downloadSingBox(version)
 	if err != nil {
@@ -3389,6 +4585,203 @@ func singboxDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "sing-box downloaded and installed successfully", "path": path})
+}
+
+// ---------------------------------------------------------------------
+// تنظیمات مبتنی‌بر env (BIND_ADDR, SINGBOX_PATH, CLOUDFLARED_INSTALL_DIR, ...)
+// از صفحه‌ی Settings
+// ---------------------------------------------------------------------
+func envSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	out := make(map[string]interface{}, len(managedEnvKeys))
+	for _, key := range managedEnvKeys {
+		effective := getSetting(key, "")
+		_, overridden := state.EnvOverrides[key]
+		out[key] = map[string]interface{}{
+			"value":             effective,
+			"overridden_by_ui":  overridden,
+			"requires_restart":  envKeysRequiringRestart[key],
+			"env_value_present": strings.TrimSpace(os.Getenv(key)) != "",
+		}
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"settings": out})
+}
+
+func updateEnvSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	allowed := make(map[string]bool, len(managedEnvKeys))
+	for _, k := range managedEnvKeys {
+		allowed[k] = true
+	}
+	var restartNeeded []string
+	for key, value := range req {
+		if !allowed[key] {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is not a manageable setting", key)})
+			return
+		}
+		if err := setSetting(key, value); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+			return
+		}
+		if envKeysRequiringRestart[key] {
+			restartNeeded = append(restartNeeded, key)
+		}
+	}
+	msg := "Settings updated"
+	if len(restartNeeded) > 0 {
+		msg += fmt.Sprintf(" — restart the manager process for %s to take effect", strings.Join(restartNeeded, ", "))
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": msg})
+}
+
+// ---------------------------------------------------------------------
+// تنظیمات و کنترل تونل Cloudflare از صفحه‌ی Settings
+// ---------------------------------------------------------------------
+func cloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	cfg := state.Cloudflare
+
+	cfCmdMu.Lock()
+	running := runningCF != nil || len(cfQuickProcesses) > 0
+	cfCmdMu.Unlock()
+
+	cfQuickURLsMu.RLock()
+	quickURLs := make(map[string]string, len(cfQuickURLs))
+	for k, v := range cfQuickURLs {
+		quickURLs[k] = v
+	}
+	cfQuickURLsMu.RUnlock()
+
+	var routes []string
+	if cfg.Mode == "api_token" && cfg.ZoneName != "" {
+		for _, r := range computeTunnelRoutes(state) {
+			routes = append(routes, r.Hostname)
+		}
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"mode":              cfg.Mode,
+		"zone_name":         cfg.ZoneName,
+		"tunnel_name":       cfg.TunnelName,
+		"tunnel_id":         cfg.TunnelID,
+		"api_token_set":     cfg.APIToken != "",
+		"tunnel_token_set":  cfg.TunnelToken != "",
+		"running":           running,
+		"quick_tunnel_urls": quickURLs,
+		"routes":            routes,
+	})
+}
+
+func updateCloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Mode        string `json:"mode"`
+		APIToken    string `json:"api_token"`
+		ZoneName    string `json:"zone_name"`
+		TunnelToken string `json:"tunnel_token"`
+		TunnelName  string `json:"tunnel_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Mode = strings.TrimSpace(req.Mode)
+	if req.Mode != "api_token" && req.Mode != "tunnel_token" && req.Mode != "quick" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "mode must be one of: api_token, tunnel_token, quick"})
+		return
+	}
+	if req.Mode == "api_token" && (strings.TrimSpace(req.APIToken) == "" || strings.TrimSpace(req.ZoneName) == "") {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "api_token mode requires both api_token and zone_name"})
+		return
+	}
+	if req.Mode == "tunnel_token" && strings.TrimSpace(req.TunnelToken) == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "tunnel_token mode requires tunnel_token"})
+		return
+	}
+
+	state := readStateOrDefault()
+	cfg := state.Cloudflare
+	cfg.Mode = req.Mode
+	if strings.TrimSpace(req.APIToken) != "" {
+		cfg.APIToken = strings.TrimSpace(req.APIToken)
+	}
+	if strings.TrimSpace(req.ZoneName) != req.ZoneName || req.ZoneName != "" {
+		// اگر دامنه تغییر کرده، zone/account/tunnel قبلی دیگر معتبر نیستند و باید دوباره resolve شوند.
+		if strings.TrimSpace(req.ZoneName) != cfg.ZoneName {
+			cfg.ZoneID, cfg.AccountID, cfg.TunnelID = "", "", ""
+		}
+		cfg.ZoneName = strings.TrimSpace(req.ZoneName)
+	}
+	if strings.TrimSpace(req.TunnelToken) != "" {
+		cfg.TunnelToken = strings.TrimSpace(req.TunnelToken)
+	}
+	if strings.TrimSpace(req.TunnelName) != "" {
+		cfg.TunnelName = strings.TrimSpace(req.TunnelName)
+	}
+	state.Cloudflare = cfg
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Cloudflare tunnel settings saved"})
+}
+
+func cloudflareStartHandler(w http.ResponseWriter, r *http.Request) {
+	if err := startCloudflareTunnel(); err != nil {
+		log.Printf("cloudflareStartHandler: %v", err)
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Cloudflare tunnel started"})
+}
+
+func cloudflareStopHandler(w http.ResponseWriter, r *http.Request) {
+	stopCloudflared()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Cloudflare tunnel stopped"})
+}
+
+func cloudflareRestartHandler(w http.ResponseWriter, r *http.Request) {
+	if err := startCloudflareTunnel(); err != nil {
+		log.Printf("cloudflareRestartHandler: %v", err)
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Cloudflare tunnel restarted"})
+}
+
+// ---------------------------------------------------------------------
+// استارت/استاپ/ری‌استارت دستی سینگ‌باکس (مستقل از rebuild)
+// ---------------------------------------------------------------------
+func singboxStartHandler(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+	var tmpl map[string]interface{}
+	var nodes []interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
+		return
+	}
+	_ = readJSON(nodesFile, &nodes)
+	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "sing-box started"})
+}
+
+func singboxStopHandler(w http.ResponseWriter, r *http.Request) {
+	singBoxCmdMu.Lock()
+	stopProcess(runningSingBox)
+	runningSingBox = nil
+	singBoxCmdMu.Unlock()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "sing-box stopped"})
+}
+
+func singboxRestartHandler(w http.ResponseWriter, r *http.Request) {
+	singboxStartHandler(w, r)
 }
 
 func addWarpHandler(w http.ResponseWriter, r *http.Request) {
@@ -3883,6 +5276,14 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
+	// override های ذخیره‌شده از صفحه‌ی Settings را قبل از هر استفاده‌ای از getSetting بارگذاری کن.
+	loadEnvOverridesCache()
+
+	// BIND_ADDR/API_PORT فقط از استارت بعدی مدیر اعمال می‌شوند (روی خود socket شنود اثر دارند)،
+	// برای همین همینجا و قبل از ساخت http.Server override احتمالی را روی متغیرهای واقعی اعمال می‌کنیم.
+	bindAddr = getSetting("BIND_ADDR", bindAddr)
+	apiPort = ":" + strings.TrimPrefix(getSetting("API_PORT", strings.TrimPrefix(apiPort, ":")), ":")
+
 	// اگر قبلاً از صفحه‌ی Settings توکنی ذخیره شده باشد، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	if persisted := readStateOrDefault().AdminToken; persisted != "" {
 		adminToken = persisted
@@ -3898,6 +5299,16 @@ func main() {
 	}
 	if bindAddr == "0.0.0.0" || bindAddr == "" {
 		log.Println("⚠️  BIND_ADDR روی تمام اینترفیس‌ها گوش می‌دهد. برای دسترسی فقط-لوکال از BIND_ADDR=127.0.0.1 استفاده کنید.")
+	}
+
+	// اگر قبلاً تونل Cloudflare از UI تنظیم شده، آن را هم بالا می‌آوریم.
+	if cfg := readStateOrDefault().Cloudflare; cfg.Mode != "" {
+		go func() {
+			time.Sleep(2 * time.Second) // صبر کوتاه تا sing-box/clash_api بالا بیاید
+			if err := startCloudflareTunnel(); err != nil {
+				log.Printf("startup: failed to start Cloudflare tunnel: %v", err)
+			}
+		}()
 	}
 
 	// ساخت اولیه‌ی config.json و اجرای sing-box بر اساس فایل‌های فعلی روی دیسک
@@ -3932,8 +5343,20 @@ func main() {
 	http.HandleFunc("/api/delete_service", requireAuth(requireMethod(http.MethodPost, deleteServiceHandler)))
 	http.HandleFunc("/api/settings", requireAuth(requireMethod(http.MethodGet, settingsHandler)))
 	http.HandleFunc("/api/settings/admin_token", requireAuth(requireMethod(http.MethodPost, updateAdminTokenHandler)))
+	http.HandleFunc("/api/settings/env", requireAuth(requireMethod(http.MethodGet, envSettingsHandler)))
+	http.HandleFunc("/api/settings/env/update", requireAuth(requireMethod(http.MethodPost, updateEnvSettingsHandler)))
 	http.HandleFunc("/api/singbox/info", requireAuth(requireMethod(http.MethodGet, singboxInfoHandler)))
 	http.HandleFunc("/api/singbox/download", requireAuth(requireMethod(http.MethodPost, singboxDownloadHandler)))
+	http.HandleFunc("/api/singbox/start", requireAuth(requireMethod(http.MethodPost, singboxStartHandler)))
+	http.HandleFunc("/api/singbox/stop", requireAuth(requireMethod(http.MethodPost, singboxStopHandler)))
+	http.HandleFunc("/api/singbox/restart", requireAuth(requireMethod(http.MethodPost, singboxRestartHandler)))
+	http.HandleFunc("/api/docker_services", requireAuth(requireMethod(http.MethodGet, dockerServicesHandler)))
+	http.HandleFunc("/api/add_docker_service", requireAuth(requireMethod(http.MethodPost, addDockerServiceHandler)))
+	http.HandleFunc("/api/delete_docker_service", requireAuth(requireMethod(http.MethodPost, deleteDockerServiceHandler)))
+	http.HandleFunc("/api/cloudflare/settings", requireAuth(settingsMethodRouter(cloudflareSettingsHandler, updateCloudflareSettingsHandler)))
+	http.HandleFunc("/api/cloudflare/start", requireAuth(requireMethod(http.MethodPost, cloudflareStartHandler)))
+	http.HandleFunc("/api/cloudflare/stop", requireAuth(requireMethod(http.MethodPost, cloudflareStopHandler)))
+	http.HandleFunc("/api/cloudflare/restart", requireAuth(requireMethod(http.MethodPost, cloudflareRestartHandler)))
 	http.HandleFunc("/api/add_warp", requireAuth(requireMethod(http.MethodPost, addWarpHandler)))
 	http.HandleFunc("/api/warp_groups", requireAuth(requireMethod(http.MethodGet, warpGroupsHandler)))
 	http.HandleFunc("/api/set_default_warp_group", requireAuth(requireMethod(http.MethodPost, setDefaultWarpGroupHandler)))
