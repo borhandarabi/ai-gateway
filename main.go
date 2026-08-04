@@ -37,6 +37,7 @@ var (
 	configFile   = getEnvDefault("CONFIG_FILE", "config.json")
 	stateFile    = getEnvDefault("STATE_FILE", "state.json") // متادیتای داخلی خود مدیر (نه چیزی که sing-box می‌خواند)
 )
+
 const (
 	singBoxCheckTimeout = 30 * time.Second
 	singBoxStopTimeout  = 10 * time.Second
@@ -1996,7 +1997,7 @@ const minimalDefaultTemplate = `{
     "clash_api": {
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
       "external_ui": "ui",
-      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.zip",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz",
       "secret": "",
       "default_mode": "rule"
     }
@@ -2072,7 +2073,7 @@ const defaultTemplateRich = `{
       "default_mode": "rule",
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
       "external_ui": "ui",
-      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.zip",
+      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz",
       "secret": "__CLASH_SECRET__"
     }
   },
