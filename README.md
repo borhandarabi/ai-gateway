@@ -80,9 +80,18 @@ cp .env.example .env
 # edit .env -- at minimum set ZAI_AUTH_TOKEN for zai-api
 # and KIMI_ACCESS_TOKEN for kimi-api (if using kimi-api)
 
-./build.sh                 # or: docker compose build
+# Note: You must provide build contexts for external repositories
+./build.sh                 # or see docker build command below
 docker compose up -d
 docker compose logs -f
+
+# Manual docker build with required build-contexts:
+# docker buildx build \
+#   --build-context deepseek_src=https://github.com/izaart95-jpg/DeepSeekFreeAPI.git \
+#   --build-context glm_src=https://github.com/izaart95-jpg/GLM-Free-API.git \
+#   -t ghcr.io/borhandarabi/ai-gateway:latest \
+#   --push \
+#   .
 ```
 
 CI equivalent: `.github/workflows/docker-build.yml` -- builds `linux/amd64`

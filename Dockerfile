@@ -72,9 +72,9 @@ RUN go build -ldflags "-s -w" -trimpath -o /out/kimi-api main.go
 # ─────────────────────────── DeepSeekProxy (Go) ──────────────────────────
 FROM golang:1.26-alpine AS deepseek-builder
 WORKDIR /src
-# Clone DeepSeekFreeAPI source directly since no build-context is defined for it
-RUN apk add --no-cache git
-RUN git clone --depth 1 https://github.com/izaart95-jpg/DeepSeekFreeAPI.git .
+# Source code will be provided via --build-context deepseek_src=...
+COPY --from=deepseek_src . .
+RUN apk add --no-cache git gcc musl-dev
 RUN go mod tidy
 # main.go is the actual service entry point.
 RUN go build -o /out/deepseek-proxy main.go
