@@ -90,6 +90,7 @@ jobs:
             grok2api_src=${{ env.GROK2API_REPO }}
             glm_src=${{ env.GLM_REPO }}
             kimi_src=${{ env.KIMI_REPO }}
+            deepseek_src=${{ env.DEEPSEEK_REPO }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
