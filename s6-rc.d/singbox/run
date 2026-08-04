@@ -14,14 +14,4 @@ export STATE_FILE="${STATE_FILE:-/data/sing-box/state.json}"
 export CLASH_API_PORT="${CLASH_API_PORT:-9090}"
 export DEFAULT_SERVICES="ZAI:${ZAI_PROXY:-2001},KIMI:${KIMI_PROXY:-2002},MIMO:${MIMO_PROXY:-2003},GROQ:${GROQ_PROXY:-2004},DEEPSEEK:${DEEPSEEK_PROXY:-2005},FlareSolverr:${FLARESOLVERR_PROXY:-2006}"
 
-
-if [ ! -f /data/sing-box/config.yaml ]; then
-  if [ "${DISABLE_TUN:-false}" = "true" ]; then
-    echo "[singbox] DISABLE_TUN=true -- seeding no-TUN config (mixed-port only)"
-    cp /opt/singbox-default-config.no-tun.yaml /data/sing-box/config.yaml
-  else
-    echo "[singbox] no /data/sing-box/config.yaml found, seeding default (TUN + mixed-port)"
-    cp /opt/singbox-default-config.yaml /data/sing-box/config.yaml
-  fi
-fi
-exec singbox-manager -c /data/sing-box/config.yaml
+exec singbox-manager
