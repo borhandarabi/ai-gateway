@@ -1,2 +1,2 @@
 #!/command/execlineb -P
-with-contenv /etc/s6-overlay/s6-rc.d/singbox-ready/run.sh
+with-contenv ./run.sh
