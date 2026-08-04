@@ -4,8 +4,19 @@
 # (pass --cap-add=NET_ADMIN --cap-add=NET_RAW --device=/dev/net/tun to `docker run`,
 # already wired into docker-compose.yml).
 set -e
-mkdir -p /data/mihomo
-if [ ! -f /data/mihomo/config.yaml ]; then
+mkdir -p /data/sing-box
+
+export HOST="${BIND_ADDR:-0.0.0.0}"
+export TEMPLATE_FILE="${TEMPLATE_FILE:-/data/sing-box/template.json}"
+export NODES_FILE="${NODES_FILE:-/data/sing-box/nodes.json}"
+export CONFIG_FILE="${CONFIG_FILE:-/data/sing-box/config.json}"
+export STATE_FILE="${STATE_FILE:-/data/sing-box/state.json}"
+export CLASH_API_PORT="${CLASH_API_PORT:-9090}"
+export DEFAULT_SERVICES="GLM:${GLM_PROXY:-2001},KIMI:${KIMI_PROXY:-2002},MIMO:${MIMO_PROXY:-2003},GROQ:${GROQ_PROXY:-2004},DEEPSEEK:${DEEPSEEK_PROXY:-2005}"
+
+
+
+if [ ! -f /data/sing-box/config.yaml ]; then
   if [ "${DISABLE_TUN:-false}" = "true" ]; then
     echo "[mihomo] DISABLE_TUN=true -- seeding no-TUN config (mixed-port only)"
     cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.yaml

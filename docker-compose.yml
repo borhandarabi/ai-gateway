@@ -5,9 +5,10 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
-        grok2api_src: ${GROK2API_REPO:-https://github.com/i-panel/grok2api-go.git#main}
-        glm_src: ${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
+        grok2api_src: ${GROK2API_REPO:-https://github.com/chenyme/grok2api.git#main}
+        glm_src: ${GLM_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
+        deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
         OMNIROUTE_IMAGE: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}
@@ -23,8 +24,9 @@ services:
       - .env
     ports:
       - "20128:20128"   # OmniRoute
-      - "3000:3000"     # MimoApi
-      - "3001:3001"     # zai-api / GlmApi
+      - "3001:3001"     # MimoApi
+      - "3002:3002"     # zai-api / GlmApi
+      - "3005:3005"     # DeepSeekApi
       - "8000:8000"     # grok2api-go
       - "9090:9090"     # mihomo Clash API
       - "7890:7890"     # mihomo mixed-port (SOCKS/HTTP)

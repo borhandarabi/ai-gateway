@@ -18,10 +18,11 @@ check() {
 }
 
 check "omniroute"  "http://127.0.0.1:${OMNIROUTE_PORT:-20128}/api/monitoring/health"
-check "mimo"       "http://127.0.0.1:${MIMO_PORT:-3000}/"
+check "mimo"       "http://127.0.0.1:${MIMO_PORT:-3003}/"
+check "kimi"       "http://127.0.0.1:${KIMI_PORT:-3002}/"
 check "zai-api"    "http://127.0.0.1:${ZAI_PORT:-3001}/health"
-check "grok2api"   "http://127.0.0.1:${GROK2API_PORT:-8000}/healthz"
-check "mihomo"     "http://127.0.0.1:${CLASH_API_PORT:-9090}/version"
+check "grok2api"   "http://127.0.0.1:${GROK2API_PORT:-3004}/healthz"
+check "singbox"    "http://127.0.0.1:${SINGBOX_API_PORT:-9090}/version"
 
 # kimi-api: only check if KIMI_ACCESS_TOKEN is set to a real value
 # (when using placeholder, kimi-api stays idle via sleep infinity)

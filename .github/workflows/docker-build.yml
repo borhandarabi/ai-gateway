@@ -11,20 +11,15 @@ on:
     branches: [main]
     tags:
       - '*'
-    paths:
-      - Dockerfile
-      - s6-rc.d/**
-      - mihomo/**
-      - healthcheck.sh
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   MIMO_REPO: https://github.com/hooshidev3/mimo-ai-proxy.git#main
-  GROK2API_REPO: https://github.com/i-panel/grok2api-go.git#main
-  GLM_REPO: https://github.com/borhandarabi/GLM-Free-API.git#main
+  GROK2API_REPO: https://github.com/chenyme/grok2api.git#main
+  GLM_REPO: https://github.com/izaart95-jpg/GLM-Free-API.git#main
   KIMI_REPO: https://github.com/izaart95-jpg/KimiFreeAPI.git#main
-  MIHOMO_VERSION: v1.19.27
+  DEEPSEEK_REPO: https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
   # from source. Pin to a specific tag instead of the floating latest-web
   # once you've settled on a version, for reproducible builds.
@@ -42,34 +37,20 @@ jobs:
           # switch runs-on back to ubuntu-latest and set qemu: true instead --
           # it'll still work, just slower and more memory-sensitive.
           #
-          # "railway" variant bakes in DISABLE_TUN=true by default, for
-          # platforms (like Railway) that don't allow privileged/TUN access.
           - platform: linux/amd64
             runs-on: ubuntu-latest
             qemu: false
             variant: default
-            disable_tun: "false"
-          - platform: linux/amd64
-            runs-on: ubuntu-latest
-            qemu: false
-            variant: railway
-            disable_tun: "true"
           - platform: linux/arm64
             runs-on: ubuntu-24.04-arm
             qemu: false
             variant: default
-            disable_tun: "false"
-          - platform: linux/arm64
-            runs-on: ubuntu-24.04-arm
-            qemu: false
-            variant: railway
-            disable_tun: "true"
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
       packages: write
     steps:
-      - name: Checkout (this repo -- Dockerfile / s6-rc.d / mihomo config only)
+      - name: Checkout (this repo -- Dockerfile / s6-rc.d / singbox-manager)
         uses: actions/checkout@v4
 
       - name: Set up QEMU (only if this platform needs emulation)
@@ -103,9 +84,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
-            MIHOMO_VERSION=${{ env.MIHOMO_VERSION }}
             OMNIROUTE_IMAGE=${{ env.OMNIROUTE_IMAGE }}
-            DISABLE_TUN=${{ matrix.disable_tun }}
           build-contexts: |
             mimo_src=${{ env.MIMO_REPO }}
             grok2api_src=${{ env.GROK2API_REPO }}

@@ -14,7 +14,7 @@
 #   - MimoApi     (Go)                : Mimo/Xiaomi provider proxy
 #   - zai-api     (Go, aka "GlmApi")  : Z.ai/GLM provider proxy
 #   - grok2api-go (Go + Node/Vite)    : Grok (xAI) provider proxy + dashboard
-#   - mihomo (Go)                      : proxy kernel + Clash API
+#   - sing-box (Go)                   : proxy kernel + Clash API
 #   - cloudflared (Go, prebuilt)      : optional Cloudflare Tunnel
 #
 # Each application stage below pulls its source from a *named build context*
@@ -26,7 +26,7 @@
 #   docker buildx build \
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
 
-#     --build-context grok2api_src=https://github.com/i-panel/grok2api-go.git#main \
+#     --build-context grok2api_src=https://github.com/chenyme/grok2api.git#main \
 #     --build-context glm_src=<GLM_REPO_URL>#<GLM_REF>   \
 #     -t ai-gateway:latest .
 #
@@ -36,7 +36,6 @@
 # pass a local path instead, e.g. --build-context glm_src=./glm-local-checkout
 # so the image still builds for local testing.
 
-ARG MIHOMO_VERSION=v1.19.27
 ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:3.8.49-web
 # ─────────────────────────── MimoApi (Go) ───────────────────────────────────
 FROM golang:1.26-alpine AS mimo-builder
@@ -69,6 +68,15 @@ RUN go mod init kimi-api
 RUN go mod tidy
 # main.go is the actual service entry point.
 RUN go build -ldflags "-s -w" -trimpath -o /out/kimi-api main.go
+
+# ─────────────────────────── DeepSeekProxy (Go) ──────────────────────────
+FROM golang:1.26-alpine AS deepseek-builder
+WORKDIR /src
+COPY --from=deepseek_src . .
+RUN apk add --no-cache git gcc musl-dev
+RUN go mod tidy
+# main.go is the actual service entry point.
+RUN go build -o /out/deepseek-proxy main.go
 
 # ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
 FROM node:22-alpine AS grok2api-frontend-builder
@@ -114,19 +122,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 RUN git clone --depth 1 https://github.com/ncopa/su-exec.git . && make
 
-# ───────────────────────── mihomo kernel binary ─────────────────────────────
-FROM alpine:3.20 AS mihomo-kernel
-ARG TARGETARCH
-ARG MIHOMO_VERSION
-RUN apk add --no-cache curl ca-certificates gzip
-RUN set -eux; \
-    if [ "$TARGETARCH" = "amd64" ]; then ASSET="mihomo-linux-amd64-compatible-${MIHOMO_VERSION}.gz"; \
-    elif [ "$TARGETARCH" = "arm64" ]; then ASSET="mihomo-linux-arm64-${MIHOMO_VERSION}.gz"; \
-    else echo "unsupported arch $TARGETARCH" >&2; exit 1; fi; \
-    curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${ASSET}" -o /tmp/k.gz; \
-    gunzip -c /tmp/k.gz > /usr/local/bin/mihomo; \
-    chmod +x /usr/local/bin/mihomo; \
-    /usr/local/bin/mihomo -v
+# ───────────────────────── SingBox-Manager binary ─────────────────────────────
+FROM golang:1.26-alpine AS singbox-manager
+WORKDIR /src
+COPY . .
+RUN apk add --no-cache git gcc musl-dev
+RUN go mod init singbox-manager
+# go.mod is pre-tidy as of writing; resolve real deps at build time.
+RUN go mod tidy
+# main.go is the actual service entry point.
+RUN go build -ldflags "-s -w" -trimpath -o /out/singbox-manager main.go
 
 # ───────────────────────────── cloudflared ──────────────────────────────────
 FROM alpine:3.20 AS cloudflared-fetch
@@ -140,7 +145,7 @@ RUN apk add --no-cache curl ca-certificates \
 # Base = the official OmniRoute image itself (see ARG OMNIROUTE_IMAGE above).
 # Its own last layers are `USER node` -- override back to root immediately so
 # our own RUN/COPY steps (s6-overlay, apt packages, other services' users)
-# work; s6's /init needs to run as root anyway (mihomo's TUN needs root/caps,
+# work; s6's /init needs to run as root anyway (singbox's TUN needs root/caps,
 # and each service that should run unprivileged -- grok2api, omniroute --
 # drops to its own user itself via su-exec inside its own s6 run script,
 # same pattern used throughout this image).
@@ -149,7 +154,6 @@ USER root
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG TARGETARCH
-ARG DISABLE_TUN=false
 
 RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
@@ -171,7 +175,7 @@ RUN set -eux; \
     rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
 
 LABEL org.opencontainers.image.title="ai-gateway" \
-      org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + mihomo + cloudflared, single image"
+      org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + singbox-manager + cloudflared, single image"
 
 # --- application artifacts ---
 # OmniRoute needs nothing here -- it's already fully baked into this base
@@ -186,6 +190,7 @@ COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
 COPY glm/tokens.sqlite /data/glm/tokens.sqlite
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
+COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy
 
 COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
 COPY --from=grok2api-frontend-builder /src/frontend/dist /opt/grok2api/frontend/dist
@@ -195,15 +200,8 @@ COPY --from=grok2api_src VERSION /opt/grok2api/VERSION
 COPY --from=grok2api_src --chmod=0755 docker/entrypoint.sh /usr/local/bin/grok2api-entrypoint
 COPY --from=su-exec-builder /src/su-exec /usr/local/bin/su-exec
 
-COPY --from=mihomo-kernel /usr/local/bin/mihomo /usr/local/bin/mihomo
+COPY --from=singbox-manager /out/singbox-manager /usr/local/bin/singbox-manager
 COPY --from=cloudflared-fetch /usr/local/bin/cloudflared /usr/local/bin/cloudflared
-
-# --- default mihomo configs (override by mounting /data/mihomo/config.yaml) ---
-# config.yaml: TUN + mixed-port, for plain Docker hosts with NET_ADMIN/TUN access.
-# config.no-tun.yaml: mixed-port only, for platforms that don't allow privileged
-# containers (e.g. Railway) -- selected automatically when DISABLE_TUN=true.
-COPY mihomo/config.yaml /opt/mihomo-default-config.yaml
-COPY mihomo/config.no-tun.yaml /opt/mihomo-default-config.no-tun.yaml
 
 # --- healthcheck + s6 service tree ---
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
@@ -218,32 +216,28 @@ RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/
 RUN groupadd -g 10001 grok2api \
     && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/mihomo \
+RUN mkdir -p /data/omniroute /data/mimo /data/glm /data/grok2api /data/sing-box \
     && chown -R node:node /data/omniroute \
-    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
-    && cp /opt/mihomo-default-config.yaml /data/mihomo/config.yaml.default \
-    && cp /opt/mihomo-default-config.no-tun.yaml /data/mihomo/config.no-tun.yaml.default
+    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api
 
 # default (overridable) network-bind mode: 0.0.0.0 unless TUNNEL_ONLY kicks in at runtime
 RUN mkdir -p /run/s6/container_environment \
     && printf '0.0.0.0' > /etc/s6-overlay/s6-rc.d/network-mode-init/BIND_ADDR_DEFAULT
 
 ENV OMNIROUTE_PORT=20128 \
-    MIMO_PORT=3000 \
+    MIMO_PORT=3003 \
     GLM_PORT=3001 \
     KIMI_PORT=3002 \
     KIMI_ACCESS_TOKEN= \
     KIMI_TOKEN=Waguri \
-    GROK2API_PORT=8000 \
-
+    GROK2API_PORT=3004 \
     CLASH_API_PORT=9090 \
     MIXED_PORT=7890 \
     ZAI_TIMEOUT=300000 \
     ZAI_AUTH_TOKEN=Waguri \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
-    ZAI_LOG_FORMAT=text \
-    DISABLE_TUN=${DISABLE_TUN}
+    ZAI_LOG_FORMAT=text
 
 EXPOSE 20128 3000 3001 3002 8000 9090 7890
 

@@ -73,14 +73,6 @@ s6-rc.d/mihomo-ready/run.sh        → bash: the actual logic
 `s6-rc-compile` will silently drop the service from the compiled database,
 causing all dependent services to never start.
 
-## Deploying on Railway
-
-See `railway/README.md` — uses `railway.json` + `railway/Dockerfile` (a
-git-clone-based build, since Railway's builder doesn't support Buildx named
-build-contexts). Important: **Railway does not support TUN mode** (no
-privileged containers / `NET_ADMIN` / `/dev/net/tun`) — mihomo runs in
-mixed-port-only mode there via `DISABLE_TUN=true`.
-
 ## Quick start
 
 ```bash
@@ -110,17 +102,16 @@ insurance for the remaining Go/Node builds.
 | `TUNNEL_TOKEN` | (empty) | Cloudflare Tunnel token. Leave empty to disable tunnel. |
 | `TUNNEL_ONLY` | `false` | When `true` + `TUNNEL_TOKEN` set, bind services to 127.0.0.1. |
 | `OMNIROUTE_PORT` | `20128` | OmniRoute port. |
-| `MIMO_PORT` | `3000` | MimoApi port. |
+| `MIMO_PORT` | `3003` | MimoApi port. |
 | `KIMI_PORT` | `3002` | kimi-api port. |
 | `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_TOKEN`. |
 | `KIMI_TOKEN` | `Waguri` | Legacy fallback for Kimi token. |
 | `ZAI_PORT` | `3001` | zai-api port. |
 | `ZAI_AUTH_TOKEN` | `Waguri` | Auth token for zai-api. Change in production! |
 | `ZAI_AGENT_MODE` | `true` | Enable agent mode for zai-api. |
-| `GROK2API_PORT` | `8000` | grok2api port. |
+| `GROK2API_PORT` | `3004` | grok2api port. |
 | `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
 | `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
-| `DISABLE_TUN` | `false` | Disable TUN mode (required on Railway). |
 
 ## Open items (explicitly unresolved — do not treat as done)
 

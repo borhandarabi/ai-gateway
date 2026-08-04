@@ -11,17 +11,80 @@ chmod 755 /data/grok2api/
 if [ ! -f /data/grok2api/config.yaml ]; then
   echo "[grok2api] No config found, generating default..."
   KEY=$(head -c 32 /dev/urandom | base64)
+  SECRET=$(head -c 32 /dev/urandom)
   cat > /data/grok2api/config.yaml << EOF
 server:
-  listen: ":${GROK2API_PORT:-8000}"
+  listen: "${BIND_ADDR:-0.0.0.0}:${GROK2API_PORT:-3004}"
+  maxBodyBytes: 33554432
+  readTimeout: 15m
+  requestTimeout: 2h
+  swaggerEnabled: false
+
+auth:
+  accessTokenTTL: 15m
+  refreshTokenTTL: 720h
+  secureCookies: false
+
 
 secrets:
-  jwtSecret: "ai-gateway-default-jwt-secret-change-me-in-production-32chars"
+  jwtSecret: "${SECRET}"
   credentialEncryptionKey: "${KEY}"
 
 bootstrapAdmin:
   username: admin
   password: admin123456
+
+frontend:
+  staticPath: "./frontend/dist"
+
+database:
+  driver: sqlite # sqlite | postgres
+  sqlite:
+    path: "/data/grok2api/backend.db"
+  postgres:
+    dsn: "postgres://user:password@127.0.0.1:5432/grok2api?sslmode=disable"
+    maxOpenConns: 50
+    maxIdleConns: 10
+
+runtimeStore:
+  driver: memory # memory | redis
+  redis:
+    address: "127.0.0.1:6379"
+    username: ""
+    password: ""
+    database: 0
+    keyPrefix: "grok2api:"
+    tls: false
+
+deployment:
+  replicas: 1
+  instanceID: ""
+  clusterID: "grok2api"
+  sharedMedia: false
+
+media:
+  driver: local
+  local:
+    path: "/data/grok2api/media"
+
+routing:
+  reasoningReplayEnabled: true
+  reasoningReplayTTL: 1h
+  reasoningReplayMaxEntries: 10240
+  segmentedSelectorEnabled: false
+  segmentedSelectorMinCandidates: 3000
+  segmentedSelectorWindowSize: 64
+
+audit:
+  bufferSize: 16384
+  batchSize: 256
+  flushInterval: 250ms
+  commitDelay: 5ms
+  ledgerMode: enforce # observe | enforce
+  ledgerFailureThreshold: 1
+  ledgerUnhealthyGrace: 10s
+  ledgerQueueHighWatermarkPercent: 90
+
 EOF
   chown grok2api:grok2api /data/grok2api/config.yaml
   chmod 0600 /data/grok2api/config.yaml

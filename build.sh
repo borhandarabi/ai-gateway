@@ -4,21 +4,20 @@
 set -euo pipefail
 
 MIMO_REPO="${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}"
-GROK2API_REPO="${GROK2API_REPO:-https://github.com/i-panel/grok2api-go.git#main}"
-GLM_REPO="${GLM_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}"
+GROK2API_REPO="${GROK2API_REPO:-https://github.com/chenyme/grok2api.git#main}"
+GLM_REPO="${GLM_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}"
 KIMI_REPO="${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}"
-MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
+DEEPSEEK_REPO="${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}"
 # OmniRoute is pulled as a prebuilt base image, not built from source 
 OMNIROUTE_IMAGE="${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}"
 TAG="${TAG:-ai-gateway:local}"
 
 docker buildx build \
   --build-context mimo_src="${MIMO_REPO}" \
-
   --build-context grok2api_src="${GROK2API_REPO}" \
   --build-context glm_src="${GLM_REPO}" \
   --build-context kimi_src="${KIMI_REPO}" \
-  --build-arg MIHOMO_VERSION="${MIHOMO_VERSION}" \
+  --build-context deepseek_src="${DEEPSEEK_REPO}" \
   --build-arg OMNIROUTE_IMAGE="${OMNIROUTE_IMAGE}" \
   -t "${TAG}" \
   --load \
