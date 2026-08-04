@@ -17,6 +17,32 @@ network namespace:
 - **cloudflared** (Go, prebuilt) — optional Cloudflare Tunnel, always
   installed, idle unless `TUNNEL_TOKEN` is set
 
+Alongside the single image, `docker-compose.yml` also runs:
+
+- **FlareSolverr** (Python + Chromium, official prebuilt image
+  `ghcr.io/flaresolverr/flaresolverr`) — Cloudflare-challenge solver,
+  port `8191`. Deliberately **not** baked into the ai-gateway image (see
+  "Why FlareSolverr is a sidecar, not an image layer" below); reachable
+  internally at `http://flaresolverr:8191/v1`.
+  
+
+## Why FlareSolverr is a sidecar, not an image layer
+
+Unlike the four bundled services above (small static Go binaries + a
+prebuilt Node image), FlareSolverr ships as a Python + real-Chromium
+stack (`python:3.11-slim-bookworm` base, hundreds of MB by itself). It
+also has no build-from-source rationale here -- there's no custom
+entrypoint/env to extract, just a maintained upstream image -- so
+baking it into `ai-gateway`'s Dockerfile would only add build time,
+image size, and a Debian bookworm/trixie packaging mismatch risk for
+zero benefit.
+
+Instead it runs as its own `docker-compose` service using the official
+image, and gets the same tunneled egress as everything else via its
+built-in `PROXY_URL` env var pointed at `ai-gateway`'s sing-box
+mixed-port (`socks5://ai-gateway:2006`) -- no shared network namespace
+required.
+
 ## Why one image, and the trade-offs
 
 This was a deliberate choice (plain-Docker deployment target, not
@@ -121,6 +147,9 @@ insurance for the remaining Go/Node builds.
 | `GROK2API_PORT` | `3004` | grok2api port. |
 | `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
 | `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
+| `FLARESOLVERR_PORT` | `8191`   | FlareSolverr sidecar port (host-mapped).                                   |
+| `FLARESOLVERR_PROXY_URL` | `socks5://ai-gateway:7890` | Routes FlareSolverr's browser traffic through the sing-box tunnel. |
+| `FLARESOLVERR_CAPTCHA_SOLVER` | `none` | FlareSolverr captcha-solver adapter name (see upstream docs).       |
 
 ## Open items (explicitly unresolved — do not treat as done)
 

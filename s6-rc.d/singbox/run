@@ -12,7 +12,7 @@ export NODES_FILE="${NODES_FILE:-/data/sing-box/nodes.json}"
 export CONFIG_FILE="${CONFIG_FILE:-/data/sing-box/config.json}"
 export STATE_FILE="${STATE_FILE:-/data/sing-box/state.json}"
 export CLASH_API_PORT="${CLASH_API_PORT:-9090}"
-export DEFAULT_SERVICES="ZAI:${ZAI_PROXY:-2001},KIMI:${KIMI_PROXY:-2002},MIMO:${MIMO_PROXY:-2003},GROQ:${GROQ_PROXY:-2004},DEEPSEEK:${DEEPSEEK_PROXY:-2005}"
+export DEFAULT_SERVICES="ZAI:${ZAI_PROXY:-2001},KIMI:${KIMI_PROXY:-2002},MIMO:${MIMO_PROXY:-2003},GROQ:${GROQ_PROXY:-2004},DEEPSEEK:${DEEPSEEK_PROXY:-2005},FlareSolverr:${FLARESOLVERR_PROXY:-2006}"
 
 
 if [ ! -f /data/sing-box/config.yaml ]; then
