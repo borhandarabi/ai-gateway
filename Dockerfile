@@ -187,7 +187,6 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=glm-builder /out/zai-api /opt/glm/zai-api
 COPY --from=glm-builder /out/token-collector /opt/glm/token-collector
-COPY glm/tokens.sqlite /data/glm/tokens.sqlite
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy
