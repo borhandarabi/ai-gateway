@@ -180,7 +180,7 @@ RUN set -eux; \
 LABEL org.opencontainers.image.title="ai-gateway" \
       org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + singbox-manager + cloudflared, single image"
 
-RUN npm install -g playwright-core && npx playwright install chromium --with-deps
+RUN npm install -g playwright && npx playwright install chromium --with-deps
 # --- application artifacts ---
 # OmniRoute needs nothing here -- it's already fully baked into this base
 # image at /app (standalone Next.js build, better-sqlite3, healthcheck.mjs,
