@@ -37,6 +37,9 @@
 # so the image still builds for local testing.
 
 ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:3.8.49-web
+# Must match (or be newer than) main.go's defaultSingBoxVersion constant --
+# see the singbox-fetch stage below for why this is baked in at build time.
+ARG SINGBOX_VERSION=1.13.16
 # ─────────────────────────── MimoApi (Go) ───────────────────────────────────
 FROM golang:1.26-alpine AS mimo-builder
 WORKDIR /src
@@ -144,6 +147,37 @@ RUN apk add --no-cache curl ca-certificates \
        -o /usr/local/bin/cloudflared \
     && chmod +x /usr/local/bin/cloudflared
 
+# ───────────────────────────── sing-box (pinned) ─────────────────────────────
+# singbox-manager (main.go) looks for a sing-box executable on PATH at
+# container startup and, if it can't find one, tries to auto-download it from
+# GitHub's release API. That API is aggressively rate-limited per source IP
+# (unauthenticated requests), so on shared/cloud egress IPs it routinely comes
+# back "403: API rate limit exceeded" -- which is exactly the failure this
+# fixes. Baking a pinned release into the image at build time means the
+# container never needs that API call just to start; the Settings-page
+# "download a different version" flow in singbox-manager is untouched and
+# still works for switching versions later.
+#
+# SINGBOX_VERSION here must match (or be newer than) main.go's
+# defaultSingBoxVersion constant so the version reported by the manager UI
+# and the one actually running agree.
+FROM alpine:3.20 AS singbox-fetch
+ARG SINGBOX_VERSION
+ARG TARGETARCH
+RUN apk add --no-cache curl ca-certificates tar \
+    && case "${TARGETARCH}" in \
+         amd64) SBARCH=amd64 ;; \
+         arm64) SBARCH=arm64 ;; \
+         *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
+       esac; \
+    SB_DIR="sing-box-${SINGBOX_VERSION}-linux-${SBARCH}"; \
+    curl -fsSL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/${SB_DIR}.tar.gz" \
+       -o /tmp/sing-box.tar.gz \
+    && tar -xzf /tmp/sing-box.tar.gz -C /tmp \
+    && mv "/tmp/${SB_DIR}/sing-box" /usr/local/bin/sing-box \
+    && chmod +x /usr/local/bin/sing-box \
+    && rm -rf /tmp/sing-box.tar.gz "/tmp/${SB_DIR}"
+
 # ══════════════════════════ Final runtime image ═════════════════════════════
 # Base = the official OmniRoute image itself (see ARG OMNIROUTE_IMAGE above).
 # Its own last layers are `USER node` -- override back to root immediately so
@@ -156,6 +190,7 @@ FROM ${OMNIROUTE_IMAGE} AS runtime
 USER root
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
+ARG SINGBOX_VERSION
 ARG TARGETARCH
 
 RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
@@ -206,6 +241,7 @@ COPY --from=su-exec-builder /src/su-exec /usr/local/bin/su-exec
 
 COPY --from=singbox-manager /out/singbox-manager /usr/local/bin/singbox-manager
 COPY --from=cloudflared-fetch /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+COPY --from=singbox-fetch /usr/local/bin/sing-box /usr/local/bin/sing-box
 
 # --- healthcheck + s6 service tree ---
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
@@ -241,7 +277,8 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_AUTH_TOKEN=Waguri \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
-    ZAI_LOG_FORMAT=text
+    ZAI_LOG_FORMAT=text \
+    SINGBOX_VERSION=${SINGBOX_VERSION}
 
 EXPOSE 20128 3000 3001 3002 8000 9090 7890
 

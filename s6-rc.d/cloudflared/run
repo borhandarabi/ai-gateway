@@ -10,4 +10,4 @@ if [ -z "${TUNNEL_TOKEN:-}" ]; then
   exec sleep infinity
 fi
 echo "[cloudflared] TUNNEL_TOKEN set -- starting tunnel"
-exec cloudflared tunnel run --token "${TUNNEL_TOKEN}"
+exec cloudflared tunnel --loglevel fatal run --token "${TUNNEL_TOKEN}"
