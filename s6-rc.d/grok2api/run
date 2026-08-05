@@ -39,7 +39,7 @@ frontend:
   staticPath: "/opt/grok2api/frontend/dist"
 
 qualityGuard:
-  enabled: false
+  enabled: true
   model: "grok-4.5"
   mode: hybrid # passive | active | hybrid
   activeInterval: 30m

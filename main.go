@@ -6,15 +6,20 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -26,6 +31,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // ---------------------------------------------------------------------
@@ -61,6 +69,10 @@ var (
 	warpTagRe     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 )
 
+func init() {
+	managedEnvKeys = append(managedEnvKeys, backupEnvKeys...)
+}
+
 func getEnvDefault(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -74,6 +86,25 @@ var managedEnvKeys = []string{
 	"BIND_ADDR", "API_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR",
+}
+
+// backupEnvKeys کلیدهای پیکربندی بکاپ/بازیابی هستند. عمداً از همان مکانیزم
+// getSetting/setSetting بقیه‌ی تنظیمات استفاده می‌کنند (نه یک ساختار جدا در
+// AppState) چون:
+//  1. هم از UI و هم با متغیر محیطی در زمان اجرای کانتینر قابل تنظیم‌اند —
+//     این دومی برای رفع مشکل مرغ‌وتخم‌مرغ در بازیابی موقع init لازم است: اگر
+//     state.json خودش داخل یکی از مسیرهای هنوز-بازیابی‌نشده باشد، بازهم
+//     می‌شود مقصد بکاپ را از قبل با env تنظیم کرد.
+//  2. رایگان در پنل عمومی «Advanced (environment) settings» هم نمایش داده می‌شوند.
+var backupEnvKeys = []string{
+	"BACKUP_PATHS_EXTRA", "BACKUP_PASSPHRASE",
+	"BACKUP_HOURLY_ENABLED", "BACKUP_HOURLY_KEEP",
+	"BACKUP_DAILY_ENABLED", "BACKUP_DAILY_KEEP",
+	"BACKUP_MONTHLY_ENABLED", "BACKUP_MONTHLY_KEEP",
+	"BACKUP_S3_ENABLED", "BACKUP_S3_ENDPOINT", "BACKUP_S3_REGION", "BACKUP_S3_BUCKET",
+	"BACKUP_S3_ACCESS_KEY", "BACKUP_S3_SECRET_KEY", "BACKUP_S3_PREFIX", "BACKUP_S3_USE_SSL",
+	"BACKUP_R2_ENABLED", "BACKUP_R2_BUCKET", "BACKUP_R2_ACCESS_KEY", "BACKUP_R2_SECRET_KEY", "BACKUP_R2_PREFIX",
+	"BACKUP_TELEGRAM_ENABLED", "BACKUP_TELEGRAM_BOT_TOKEN", "BACKUP_TELEGRAM_CHAT_ID",
 }
 
 // envKeysRequiringRestart کلیدهایی هستند که چون روی socket شنود HTTP یا متغیرهای
@@ -796,6 +827,75 @@ const htmlContent = `<!DOCTYPE html>
         </div>
 
         <div class="panel">
+          <div class="panel-head"><h2>Backup &amp; Restore</h2></div>
+          <p class="sub">/data and /app/data are always included. Restore is checked automatically on container startup if those two are empty and a previous backup exists. <span class="hint">Everything here is also settable via the matching BACKUP_* environment variable at container start — useful for bootstrapping before any restore has happened.</span></p>
+
+          <h3 style="margin:10px 0 6px;font-size:14px;">Paths</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label>Always included</label><input type="text" value="/data, /app/data" disabled></div>
+            <div class="field"><label for="bkExtraPaths">Extra paths/files <span class="hint">(comma-separated, optional)</span></label><input type="text" id="bkExtraPaths" placeholder="/etc/myapp,/root/secrets.txt"></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px;font-size:14px;">Encryption</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label for="bkPassphrase">Passphrase <span class="hint" id="bkPassphraseHint">(empty = archives are not encrypted)</span></label><input type="password" id="bkPassphrase" placeholder="Leave empty to keep unencrypted" autocomplete="new-password"></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px;font-size:14px;">Schedule</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label><input type="checkbox" id="bkHourlyEnabled"> Hourly</label><input type="number" id="bkHourlyKeep" placeholder="keep (24)" min="1"></div>
+            <div class="field"><label><input type="checkbox" id="bkDailyEnabled"> Daily</label><input type="number" id="bkDailyKeep" placeholder="keep (7)" min="1"></div>
+            <div class="field"><label><input type="checkbox" id="bkMonthlyEnabled"> Monthly</label><input type="number" id="bkMonthlyKeep" placeholder="keep (6)" min="1"></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px;font-size:14px;">S3-compatible</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label><input type="checkbox" id="bkS3Enabled"> Enabled</label></div>
+            <div class="field"><label for="bkS3Endpoint">Endpoint</label><input type="text" id="bkS3Endpoint" placeholder="s3.amazonaws.com"></div>
+            <div class="field"><label for="bkS3Region">Region</label><input type="text" id="bkS3Region" placeholder="us-east-1"></div>
+            <div class="field"><label for="bkS3Bucket">Bucket</label><input type="text" id="bkS3Bucket"></div>
+          </div>
+          <div class="row" style="align-items:flex-end;margin-top:8px;">
+            <div class="field"><label for="bkS3AccessKey">Access key</label><input type="text" id="bkS3AccessKey" autocomplete="off"></div>
+            <div class="field"><label for="bkS3SecretKey">Secret key</label><input type="password" id="bkS3SecretKey" placeholder="Leave empty to keep the current key" autocomplete="new-password"></div>
+            <div class="field"><label for="bkS3Prefix">Prefix</label><input type="text" id="bkS3Prefix" placeholder="optional/path"></div>
+            <div class="field"><label><input type="checkbox" id="bkS3UseSSL" checked> Use SSL</label></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px;font-size:14px;">Cloudflare R2</h3>
+          <p class="sub"><span class="hint">Reuses the Cloudflare API Token from the Tunnel section to create the bucket, but R2 object access needs its own S3 API credentials — generate those separately under R2 → Manage API tokens and paste them below.</span></p>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label><input type="checkbox" id="bkR2Enabled"> Enabled</label></div>
+            <div class="field"><label for="bkR2Bucket">Bucket</label><input type="text" id="bkR2Bucket"></div>
+            <button class="btn btn-ghost btn-sm" onclick="createR2Bucket()">Create bucket in Cloudflare</button>
+          </div>
+          <div class="row" style="align-items:flex-end;margin-top:8px;">
+            <div class="field"><label for="bkR2AccessKey">R2 access key</label><input type="text" id="bkR2AccessKey" autocomplete="off"></div>
+            <div class="field"><label for="bkR2SecretKey">R2 secret key</label><input type="password" id="bkR2SecretKey" placeholder="Leave empty to keep the current key" autocomplete="new-password"></div>
+            <div class="field"><label for="bkR2Prefix">Prefix</label><input type="text" id="bkR2Prefix" placeholder="optional/path"></div>
+          </div>
+
+          <h3 style="margin:14px 0 6px;font-size:14px;">Telegram bot</h3>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field"><label><input type="checkbox" id="bkTgEnabled"> Enabled</label></div>
+            <div class="field"><label for="bkTgBotToken">Bot token</label><input type="password" id="bkTgBotToken" placeholder="Leave empty to keep the current token" autocomplete="new-password"></div>
+            <div class="field"><label for="bkTgChatId">Chat ID</label><input type="text" id="bkTgChatId" placeholder="e.g. -1001234567890"></div>
+          </div>
+          <p class="sub"><span class="hint">Archives over ~18MB are automatically split into numbered parts (Telegram's bot download cap is 20MB) and reassembled on restore.</span></p>
+
+          <div class="row" style="margin-top:14px;">
+            <button class="btn btn-primary" onclick="saveBackupSettings()">Save settings</button>
+            <button class="btn btn-ghost btn-sm" onclick="runBackupNow()">Backup now</button>
+          </div>
+
+          <h3 style="margin:16px 0 6px;font-size:14px;">Available backups</h3>
+          <table class="data">
+            <thead><tr><th>When</th><th>Cadence</th><th>Destination</th><th>Size</th><th>Enc.</th><th></th></tr></thead>
+            <tbody id="backupListBody"><tr class="empty-row"><td colspan="6">No backups yet.</td></tr></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
           <div class="panel-head"><h2>Advanced (environment) settings</h2></div>
           <p class="sub">These normally come from environment variables at startup; changing them here overrides that (persisted, and used the next time the relevant action runs). <span class="hint">BIND_ADDR/API_PORT need a manager restart to take effect.</span></p>
           <div id="envSettingsBody"></div>
@@ -993,7 +1093,7 @@ const htmlContent = `<!DOCTYPE html>
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
     if (name === 'raw') ensureRawEditors();
-    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadEnvSettings(); }
+    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadEnvSettings(); loadBackupSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
     if (name === 'apps') loadAppsTabs();
   };
@@ -1906,6 +2006,154 @@ const htmlContent = `<!DOCTYPE html>
     });
   };
 
+  // -----------------------------------------------------------------
+  // Backup & Restore
+  // -----------------------------------------------------------------
+  function backupFmtSize(bytes){
+    if (!bytes) return '-';
+    var units = ['B','KB','MB','GB'], i = 0, n = bytes;
+    while (n >= 1024 && i < units.length - 1){ n /= 1024; i++; }
+    return n.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+  }
+
+  async function loadBackupSettings(){
+    try {
+      var res = await fetch('/api/backup/settings');
+      var data = await res.json();
+
+      document.getElementById('bkExtraPaths').value = (data.paths_extra || []).join(',');
+      document.getElementById('bkPassphraseHint').textContent = data.passphrase_set ? '(set — leave empty to keep it, type a new one to change it)' : '(empty = archives are not encrypted)';
+
+      var c = data.cadences || {};
+      ['hourly','daily','monthly'].forEach(function(name){
+        var cc = c[name] || {};
+        document.getElementById('bk' + name.charAt(0).toUpperCase() + name.slice(1) + 'Enabled').checked = !!cc.enabled;
+        document.getElementById('bk' + name.charAt(0).toUpperCase() + name.slice(1) + 'Keep').value = cc.keep || '';
+      });
+
+      var s3 = data.s3 || {};
+      document.getElementById('bkS3Enabled').checked = !!s3.enabled;
+      document.getElementById('bkS3Endpoint').value = s3.endpoint || '';
+      document.getElementById('bkS3Region').value = s3.region || '';
+      document.getElementById('bkS3Bucket').value = s3.bucket || '';
+      document.getElementById('bkS3Prefix').value = s3.prefix || '';
+      document.getElementById('bkS3UseSSL').checked = s3.use_ssl !== false;
+      document.getElementById('bkS3AccessKey').value = s3.access_key_set ? '(set)' : '';
+
+      var r2 = data.cloudflare_r2 || {};
+      document.getElementById('bkR2Enabled').checked = !!r2.enabled;
+      document.getElementById('bkR2Bucket').value = r2.bucket || '';
+      document.getElementById('bkR2Prefix').value = r2.prefix || '';
+      document.getElementById('bkR2AccessKey').value = r2.access_key_set ? '(set)' : '';
+
+      var tg = data.telegram || {};
+      document.getElementById('bkTgEnabled').checked = !!tg.enabled;
+      document.getElementById('bkTgChatId').value = tg.chat_id || '';
+
+      var body = document.getElementById('backupListBody');
+      var backups = data.backups || [];
+      if (!backups.length){
+        body.innerHTML = '<tr class="empty-row"><td colspan="6">No backups yet.</td></tr>';
+      } else {
+        body.innerHTML = '';
+        backups.forEach(function(b){
+          var tr = document.createElement('tr');
+          var when = new Date(b.timestamp).toLocaleString();
+          [when, b.cadence, b.destination, backupFmtSize(b.size_bytes), b.encrypted ? 'yes' : 'no'].forEach(function(v){
+            var td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+          });
+          var tdAct = document.createElement('td');
+          var btn = document.createElement('button');
+          btn.className = 'btn btn-danger btn-sm';
+          btn.textContent = 'Restore';
+          btn.onclick = function(){
+            askConfirm('Restore this backup?', 'This overwrites current files in /data, /app/data, and any extra configured paths with the contents of this archive (' + when + ', ' + b.destination + ').', function(){
+              api('/api/backup/restore', { destination: b.destination, key: b.key, timestamp: b.timestamp }).then(function(data){
+                showMessage(data.message || 'Restored', 'success');
+              }).catch(function(err){ showMessage(err.message, 'danger'); });
+            });
+          };
+          tdAct.appendChild(btn);
+          tr.appendChild(tdAct);
+          body.appendChild(tr);
+        });
+      }
+    } catch (err){
+      showMessage('Failed to load backup settings: ' + err.message, 'danger');
+    }
+  }
+  window.loadBackupSettings = loadBackupSettings;
+
+  window.saveBackupSettings = function(){
+    var body = {
+      BACKUP_PATHS_EXTRA: document.getElementById('bkExtraPaths').value.trim(),
+      BACKUP_HOURLY_ENABLED: document.getElementById('bkHourlyEnabled').checked ? 'true' : 'false',
+      BACKUP_HOURLY_KEEP: document.getElementById('bkHourlyKeep').value.trim(),
+      BACKUP_DAILY_ENABLED: document.getElementById('bkDailyEnabled').checked ? 'true' : 'false',
+      BACKUP_DAILY_KEEP: document.getElementById('bkDailyKeep').value.trim(),
+      BACKUP_MONTHLY_ENABLED: document.getElementById('bkMonthlyEnabled').checked ? 'true' : 'false',
+      BACKUP_MONTHLY_KEEP: document.getElementById('bkMonthlyKeep').value.trim(),
+      BACKUP_S3_ENABLED: document.getElementById('bkS3Enabled').checked ? 'true' : 'false',
+      BACKUP_S3_ENDPOINT: document.getElementById('bkS3Endpoint').value.trim(),
+      BACKUP_S3_REGION: document.getElementById('bkS3Region').value.trim(),
+      BACKUP_S3_BUCKET: document.getElementById('bkS3Bucket').value.trim(),
+      BACKUP_S3_PREFIX: document.getElementById('bkS3Prefix').value.trim(),
+      BACKUP_S3_USE_SSL: document.getElementById('bkS3UseSSL').checked ? 'true' : 'false',
+      BACKUP_R2_ENABLED: document.getElementById('bkR2Enabled').checked ? 'true' : 'false',
+      BACKUP_R2_BUCKET: document.getElementById('bkR2Bucket').value.trim(),
+      BACKUP_R2_PREFIX: document.getElementById('bkR2Prefix').value.trim(),
+      BACKUP_TELEGRAM_ENABLED: document.getElementById('bkTgEnabled').checked ? 'true' : 'false',
+      BACKUP_TELEGRAM_CHAT_ID: document.getElementById('bkTgChatId').value.trim()
+    };
+    // فیلدهای محرمانه: فقط اگر کاربر واقعاً چیز تازه‌ای تایپ کرده بفرست، وگرنه
+    // مقدار قبلی دست‌نخورده بماند (چون سرور برای هر کلید موجود در body آن را
+    // با همان مقدار (حتی خالی) جایگزین می‌کند).
+    var passphrase = document.getElementById('bkPassphrase').value;
+    if (passphrase !== '') body.BACKUP_PASSPHRASE = passphrase;
+    var s3Access = document.getElementById('bkS3AccessKey').value;
+    if (s3Access !== '' && s3Access !== '(set)') body.BACKUP_S3_ACCESS_KEY = s3Access;
+    var s3Secret = document.getElementById('bkS3SecretKey').value;
+    if (s3Secret !== '') body.BACKUP_S3_SECRET_KEY = s3Secret;
+    var r2Access = document.getElementById('bkR2AccessKey').value;
+    if (r2Access !== '' && r2Access !== '(set)') body.BACKUP_R2_ACCESS_KEY = r2Access;
+    var r2Secret = document.getElementById('bkR2SecretKey').value;
+    if (r2Secret !== '') body.BACKUP_R2_SECRET_KEY = r2Secret;
+    var tgToken = document.getElementById('bkTgBotToken').value;
+    if (tgToken !== '') body.BACKUP_TELEGRAM_BOT_TOKEN = tgToken;
+
+    api('/api/backup/settings', body).then(function(data){
+      showMessage(data.message || 'Saved', 'success');
+      document.getElementById('bkPassphrase').value = '';
+      document.getElementById('bkS3SecretKey').value = '';
+      document.getElementById('bkR2SecretKey').value = '';
+      document.getElementById('bkTgBotToken').value = '';
+      loadBackupSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  window.runBackupNow = function(){
+    showMessage('Running backup…', 'success');
+    api('/api/backup/run', { cadence: 'manual' }).then(function(data){
+      showMessage(data.message || 'Backup done', 'success');
+      loadBackupSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  window.createR2Bucket = function(){
+    var bucket = document.getElementById('bkR2Bucket').value.trim();
+    if (!bucket){ showMessage('Enter a bucket name first', 'danger'); return; }
+    api('/api/backup/r2/create_bucket', { bucket: bucket }).then(function(data){
+      showMessage(data.message || 'Bucket created', 'success');
+      loadBackupSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
   async function loadDashboardFrame(){
     var frame = document.getElementById('dashboardFrame');
     var localPort = '9090', secret = '';
@@ -2102,7 +2350,8 @@ const minimalDefaultTemplate = `{
             "external_ui": "metacubexd",
             "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
             "external_ui_download_detour": "direct",
-            "default_mode": "rule"
+            "default_mode": "rule",
+			"secret": "__CLASH_SECRET__"
         },
         "cache_file": {
             "enabled": true,
@@ -2178,7 +2427,8 @@ const defaultTemplateRich = `{
       "external_ui": "metacubexd",
       "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
       "external_ui_download_detour": "direct",
-      "default_mode": "rule"
+      "default_mode": "rule",
+	  "secret": "__CLASH_SECRET__"
     },
     "cache_file": {
       "enabled": true,
@@ -5391,6 +5641,1100 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------
+// =====================================================================
+// Backup / Restore  (S3-سازگار عمومی، Cloudflare R2، Telegram Bot)
+// =====================================================================
+//
+// همه‌ی پیکربندی از طریق getSetting/setSetting (managedEnvKeys) ذخیره
+// می‌شود — یعنی هم از UI و هم با متغیر محیطی زمان استارت کانتینر قابل
+// تنظیم است (دومی برای رفع مشکل مرغ‌وتخم‌مرغِ بازیابی در init لازم است).
+//
+// ایندکس محلی (backup-index.json) داخل خودِ /data نگه داشته می‌شود، چون
+// /data همیشه یکی از مسیرهای بکاپ است: یعنی خودِ ایندکس هم در هر بکاپ بعدی
+// بکاپ می‌شود و با بازیابی، خودش هم برمی‌گردد — بدون اینکه لازم باشد از سه
+// مقصد مختلف (که تلگرام اصلاً API لیست‌کردن ندارد) لیست را از نو بسازیم.
+
+const backupIndexFile = "/data/.backup-index.json"
+
+// backupIndexEntry یک آرشیو بکاپ آپلودشده را توصیف می‌کند.
+type backupIndexEntry struct {
+	Cadence        string   `json:"cadence"`     // hourly | daily | monthly | manual
+	Destination    string   `json:"destination"` // s3 | cloudflare_r2 | telegram
+	Key            string   `json:"key"`         // s3/r2: object key آرشیو. telegram: comma-joined file_id قطعات به ترتیب
+	ManifestKey    string   `json:"manifest_key,omitempty"`
+	TelegramMsgIDs []string `json:"telegram_msg_ids,omitempty"` // فقط تلگرام، برای حذف موقع prune
+	Timestamp      string   `json:"timestamp"`                  // RFC3339 (UTC)
+	SizeBytes      int64    `json:"size_bytes"`
+	Encrypted      bool     `json:"encrypted"`
+	Paths          []string `json:"paths"`
+}
+
+type backupIndex struct {
+	Entries []backupIndexEntry `json:"entries"`
+}
+
+func backupLoadIndex() backupIndex {
+	var idx backupIndex
+	data, err := os.ReadFile(backupIndexFile)
+	if err != nil {
+		return idx
+	}
+	_ = json.Unmarshal(data, &idx)
+	return idx
+}
+
+func backupSaveIndex(idx backupIndex) error {
+	if err := os.MkdirAll(filepath.Dir(backupIndexFile), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(backupIndexFile, data, 0600)
+}
+
+func backupAppendIndexEntry(e backupIndexEntry) error {
+	backupIndexMu.Lock()
+	defer backupIndexMu.Unlock()
+	idx := backupLoadIndex()
+	idx.Entries = append(idx.Entries, e)
+	return backupSaveIndex(idx)
+}
+
+var backupIndexMu sync.Mutex
+var backupRunMu sync.Mutex // یک بکاپ در آنِ واحد (دستی یا زمان‌بندی‌شده هم‌پوشانی نکنند)
+
+// ---------------------------------------------------------------------
+// تنظیمات
+// ---------------------------------------------------------------------
+
+// backupDefaultPaths مسیرهایی که همیشه (بدون امکان حذف) بکاپ/بازیابی می‌شوند.
+func backupDefaultPaths() []string { return []string{"/data", "/app/data"} }
+
+// backupExtraPaths مسیرهای اضافه‌ای که کاربر خودش از Settings اضافه کرده.
+func backupExtraPaths() []string {
+	raw := strings.TrimSpace(getSetting("BACKUP_PATHS_EXTRA", ""))
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func backupAllPaths() []string {
+	return append(append([]string{}, backupDefaultPaths()...), backupExtraPaths()...)
+}
+
+func backupSetExtraPaths(paths []string) error {
+	return setSetting("BACKUP_PATHS_EXTRA", strings.Join(paths, ","))
+}
+
+func backupIntSetting(key string, def int) int {
+	v := strings.TrimSpace(getSetting(key, ""))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+func backupBoolSetting(key string, def bool) bool {
+	v := strings.TrimSpace(getSetting(key, ""))
+	if v == "" {
+		return def
+	}
+	return strings.EqualFold(v, "true") || v == "1"
+}
+
+// backupCadenceConfig تنظیمات یک بازه‌ی زمان‌بندی (ساعتی/روزانه/ماهانه) را برمی‌گرداند.
+type backupCadenceConfig struct {
+	Name    string
+	Enabled bool
+	Keep    int
+	Period  time.Duration // برای تشخیص "الان وقتشه یا نه" در scheduler
+}
+
+func backupCadences() []backupCadenceConfig {
+	return []backupCadenceConfig{
+		{Name: "hourly", Enabled: backupBoolSetting("BACKUP_HOURLY_ENABLED", false), Keep: backupIntSetting("BACKUP_HOURLY_KEEP", 24), Period: time.Hour},
+		{Name: "daily", Enabled: backupBoolSetting("BACKUP_DAILY_ENABLED", false), Keep: backupIntSetting("BACKUP_DAILY_KEEP", 7), Period: 24 * time.Hour},
+		{Name: "monthly", Enabled: backupBoolSetting("BACKUP_MONTHLY_ENABLED", false), Keep: backupIntSetting("BACKUP_MONTHLY_KEEP", 6), Period: 30 * 24 * time.Hour},
+	}
+}
+
+func backupAnyDestinationEnabled() bool {
+	_, s3ok := backupS3Target()
+	_, r2ok := backupR2Target()
+	tgOK := backupBoolSetting("BACKUP_TELEGRAM_ENABLED", false) &&
+		getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "") != "" && getSetting("BACKUP_TELEGRAM_CHAT_ID", "") != ""
+	return s3ok || r2ok || tgOK
+}
+
+// ---------------------------------------------------------------------
+// آرشیو‌سازی + رمزگذاری اختیاری (AES-256-CTR استریمی — برای محرمانگی؛ برای
+// یکپارچگی/tamper-detection به‌جای این باید از حجم عملیاتی GCM با
+// فریم‌بندی chunk استفاده می‌شد که برای این حجم کد صرف نشد)
+// ---------------------------------------------------------------------
+
+func backupArchiveBaseName(cadence string) string {
+	return fmt.Sprintf("backup-%s-%s", cadence, time.Now().UTC().Format("20060102-150405"))
+}
+
+// backupCreateTarGz مسیرهای داده‌شده را با مسیر مطلق کامل (بدون "/" ابتدایی)
+// داخل tar.gz می‌ریزد تا موقع extract دقیقاً به همان مسیر مطلق برگردند و
+// تداخلی بین "/data" و "/app/data" پیش نیاید.
+func backupCreateTarGz(destPath string, paths []string) error {
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	for _, root := range paths {
+		root = filepath.Clean(root)
+		if _, err := os.Lstat(root); err != nil {
+			if os.IsNotExist(err) {
+				continue // مسیر پیکربندی‌شده ولی هنوز روی دیسک نیست، رد شو
+			}
+			return err
+		}
+		werr := filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			// خودِ فایل ایندکس را دوباره داخل خودش نریز (بی‌ضرره ولی لازم نیست)
+			if p == backupIndexFile {
+				return nil
+			}
+			name := strings.TrimPrefix(p, "/")
+			if fi.IsDir() {
+				if name != "" {
+					hdr, _ := tar.FileInfoHeader(fi, "")
+					hdr.Name = name + "/"
+					_ = tw.WriteHeader(hdr)
+				}
+				return nil
+			}
+			if !fi.Mode().IsRegular() {
+				return nil // سوکت/دیوایس/سیملینک عجیب را رد کن
+			}
+			hdr, err := tar.FileInfoHeader(fi, "")
+			if err != nil {
+				return err
+			}
+			hdr.Name = name
+			if err := tw.WriteHeader(hdr); err != nil {
+				return err
+			}
+			rf, err := os.Open(p)
+			if err != nil {
+				return err
+			}
+			defer rf.Close()
+			_, err = io.Copy(tw, rf)
+			return err
+		})
+		if werr != nil {
+			return werr
+		}
+	}
+	return nil
+}
+
+func backupExtractTarGz(srcPath string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		target := "/" + strings.TrimPrefix(hdr.Name, "/")
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			mode := os.FileMode(hdr.Mode)
+			if mode == 0 {
+				mode = 0644
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		}
+	}
+	return nil
+}
+
+// backupEncryptFile با AES-256-CTR رمزگذاری استریمی می‌کند (حافظه‌ی ثابت،
+// برای آرشیوهای بزرگ مناسب است). IV تصادفی ۱۶ بایتی اول فایل رمزشده ذخیره
+// می‌شود. نکته: CTR بدون تگ احراز اصالت است — یعنی محرمانگی تضمین می‌شود
+// اما دستکاری آرشیو رمزشده (tamper) تشخیص داده نمی‌شود.
+func backupEncryptFile(passphrase, srcPath, dstPath string) error {
+	key := sha256.Sum256([]byte(passphrase))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return err
+	}
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return err
+	}
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := out.Write(iv); err != nil {
+		return err
+	}
+	stream := cipher.NewCTR(block, iv)
+	writer := &cipher.StreamWriter{S: stream, W: out}
+	_, err = io.Copy(writer, in)
+	return err
+}
+
+func backupDecryptFile(passphrase, srcPath, dstPath string) error {
+	key := sha256.Sum256([]byte(passphrase))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return err
+	}
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(in, iv); err != nil {
+		return fmt.Errorf("archive too short or not encrypted: %w", err)
+	}
+	out, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	stream := cipher.NewCTR(block, iv)
+	reader := &cipher.StreamReader{S: stream, R: in}
+	_, err = io.Copy(out, reader)
+	return err
+}
+
+// ---------------------------------------------------------------------
+// مقصد S3-سازگار عمومی + Cloudflare R2 (هر دو با همان کلاینت minio-go)
+// ---------------------------------------------------------------------
+
+type backupS3TargetCfg struct {
+	label     string
+	endpoint  string
+	region    string
+	bucket    string
+	accessKey string
+	secretKey string
+	prefix    string
+	useSSL    bool
+}
+
+func (t backupS3TargetCfg) objectKey(key string) string {
+	if t.prefix == "" {
+		return key
+	}
+	return t.prefix + "/" + key
+}
+
+func backupS3Target() (backupS3TargetCfg, bool) {
+	if !backupBoolSetting("BACKUP_S3_ENABLED", false) {
+		return backupS3TargetCfg{}, false
+	}
+	ep := strings.TrimSpace(getSetting("BACKUP_S3_ENDPOINT", "s3.amazonaws.com"))
+	ep = strings.TrimPrefix(strings.TrimPrefix(ep, "https://"), "http://")
+	bucket := getSetting("BACKUP_S3_BUCKET", "")
+	accessKey := getSetting("BACKUP_S3_ACCESS_KEY", "")
+	if ep == "" || bucket == "" || accessKey == "" {
+		return backupS3TargetCfg{}, false
+	}
+	return backupS3TargetCfg{
+		label:     "s3",
+		endpoint:  ep,
+		region:    getSetting("BACKUP_S3_REGION", "us-east-1"),
+		bucket:    bucket,
+		accessKey: accessKey,
+		secretKey: getSetting("BACKUP_S3_SECRET_KEY", ""),
+		prefix:    strings.Trim(getSetting("BACKUP_S3_PREFIX", ""), "/"),
+		useSSL:    backupBoolSetting("BACKUP_S3_USE_SSL", true),
+	}, true
+}
+
+// backupResolveCFAccount توکن/accountID لازم برای R2 را برمی‌گرداند: اول از
+// state.json کش‌شده (اگر تونل api_token قبلاً راه‌اندازی شده)، وگرنه دوباره
+// از zone_name resolve می‌کند.
+func backupResolveCFAccount() (token, accountID string, err error) {
+	cfg := readStateOrDefault().Cloudflare
+	token = strings.TrimSpace(cfg.APIToken)
+	if token == "" {
+		return "", "", fmt.Errorf("Cloudflare API Token تنظیم نشده (تنظیمات → Cloudflare Tunnel)")
+	}
+	if cfg.AccountID != "" {
+		return token, cfg.AccountID, nil
+	}
+	if cfg.ZoneName == "" {
+		return "", "", fmt.Errorf("دامنه/Zone در تنظیمات Cloudflare مشخص نشده")
+	}
+	_, accountID, err = cfResolveZone(token, cfg.ZoneName)
+	return token, accountID, err
+}
+
+func backupR2Target() (backupS3TargetCfg, bool) {
+	if !backupBoolSetting("BACKUP_R2_ENABLED", false) {
+		return backupS3TargetCfg{}, false
+	}
+	bucket := getSetting("BACKUP_R2_BUCKET", "")
+	accessKey := getSetting("BACKUP_R2_ACCESS_KEY", "")
+	if bucket == "" || accessKey == "" {
+		return backupS3TargetCfg{}, false
+	}
+	accountID := readStateOrDefault().Cloudflare.AccountID
+	if accountID == "" {
+		if _, resolved, err := backupResolveCFAccount(); err == nil {
+			accountID = resolved
+		}
+	}
+	if accountID == "" {
+		return backupS3TargetCfg{}, false
+	}
+	return backupS3TargetCfg{
+		label:     "cloudflare_r2",
+		endpoint:  accountID + ".r2.cloudflarestorage.com",
+		region:    "auto",
+		bucket:    bucket,
+		accessKey: accessKey,
+		secretKey: getSetting("BACKUP_R2_SECRET_KEY", ""),
+		prefix:    strings.Trim(getSetting("BACKUP_R2_PREFIX", ""), "/"),
+		useSSL:    true,
+	}, true
+}
+
+func backupS3Client(t backupS3TargetCfg) (*minio.Client, error) {
+	return minio.New(t.endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(t.accessKey, t.secretKey, ""),
+		Secure: t.useSSL,
+		Region: t.region,
+	})
+}
+
+func backupS3Upload(t backupS3TargetCfg, key, filePath string) error {
+	cli, err := backupS3Client(t)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	_, err = cli.FPutObject(ctx, t.bucket, t.objectKey(key), filePath, minio.PutObjectOptions{})
+	return err
+}
+
+func backupS3Download(t backupS3TargetCfg, key, destPath string) error {
+	cli, err := backupS3Client(t)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	return cli.FGetObject(ctx, t.bucket, t.objectKey(key), destPath, minio.GetObjectOptions{})
+}
+
+func backupS3Delete(t backupS3TargetCfg, key string) error {
+	cli, err := backupS3Client(t)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return cli.RemoveObject(ctx, t.bucket, t.objectKey(key), minio.RemoveObjectOptions{})
+}
+
+// ---------------------------------------------------------------------
+// مقصد Telegram Bot
+// ---------------------------------------------------------------------
+
+// telegramChunkSize کمی زیر سقف ۲۰ مگابایتیِ getFile نگه داشته می‌شود، چون
+// محدودیت واقعیِ رفت‌وبرگشت (آپلود ۵۰ مگابایت ولی دانلود فقط ۲۰ مگابایت
+// از طریق Bot API استاندارد) همان ۲۰ مگابایت است — بدون این، بازیابی از
+// روی قطعات بزرگ‌تر اصلاً ممکن نیست.
+const telegramChunkSize = 18 * 1024 * 1024
+
+func telegramSendDocument(botToken, chatID, filename string, content io.Reader, caption string) (fileID, messageID string, err error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("chat_id", chatID)
+	if caption != "" {
+		_ = mw.WriteField("caption", caption)
+	}
+	part, err := mw.CreateFormFile("document", filename)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := io.Copy(part, content); err != nil {
+		return "", "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.telegram.org/bot"+botToken+"/sendDocument", &buf)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Ok     bool `json:"ok"`
+		Result struct {
+			MessageID int `json:"message_id"`
+			Document  struct {
+				FileID string `json:"file_id"`
+			} `json:"document"`
+		} `json:"result"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", err
+	}
+	if !parsed.Ok {
+		return "", "", fmt.Errorf("Telegram API error: %s", parsed.Description)
+	}
+	return parsed.Result.Document.FileID, strconv.Itoa(parsed.Result.MessageID), nil
+}
+
+func telegramDeleteMessage(botToken, chatID, messageID string) error {
+	req, err := http.NewRequest(http.MethodPost, "https://api.telegram.org/bot"+botToken+"/deleteMessage",
+		strings.NewReader(url.Values{"chat_id": {chatID}, "message_id": {messageID}}.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil // بهترین‌تلاش؛ اگر پیام از قبل پاک شده بود هم مهم نیست
+}
+
+func telegramDownloadFile(botToken, fileID, destPath string) error {
+	getFileURL := "https://api.telegram.org/bot" + botToken + "/getFile?file_id=" + url.QueryEscape(fileID)
+	resp, err := http.Get(getFileURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Ok     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return err
+	}
+	if !parsed.Ok {
+		return fmt.Errorf("Telegram getFile error: %s", parsed.Description)
+	}
+	dresp, err := http.Get("https://api.telegram.org/file/bot" + botToken + "/" + parsed.Result.FilePath)
+	if err != nil {
+		return err
+	}
+	defer dresp.Body.Close()
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, dresp.Body)
+	return err
+}
+
+// telegramUploadFile فایل را در صورت نیاز به قطعات ≤۱۸ مگابایتی می‌شکند و
+// هر قطعه را جدا می‌فرستد؛ file_id هر قطعه (به ترتیب) برای بازسازی لازم است.
+func telegramUploadFile(botToken, chatID, filePath, caption string) (fileIDs, msgIDs []string, err error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	base := filepath.Base(filePath)
+	if fi.Size() <= telegramChunkSize {
+		fid, mid, err := telegramSendDocument(botToken, chatID, base, f, caption)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []string{fid}, []string{mid}, nil
+	}
+	buf := make([]byte, telegramChunkSize)
+	part := 0
+	for {
+		n, rerr := io.ReadFull(f, buf)
+		if n > 0 {
+			part++
+			name := fmt.Sprintf("%s.part%03d", base, part)
+			fid, mid, err := telegramSendDocument(botToken, chatID, name, bytes.NewReader(buf[:n]), fmt.Sprintf("%s (part %d)", caption, part))
+			if err != nil {
+				return fileIDs, msgIDs, err
+			}
+			fileIDs = append(fileIDs, fid)
+			msgIDs = append(msgIDs, mid)
+		}
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			break
+		}
+		if rerr != nil {
+			return fileIDs, msgIDs, rerr
+		}
+	}
+	return fileIDs, msgIDs, nil
+}
+
+func telegramDownloadParts(botToken string, fileIDs []string, destPath string) error {
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	tmp, err := os.MkdirTemp("", "tg-part-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	for i, fid := range fileIDs {
+		partPath := filepath.Join(tmp, fmt.Sprintf("part-%03d", i))
+		if err := telegramDownloadFile(botToken, fid, partPath); err != nil {
+			return fmt.Errorf("part %d/%d: %w", i+1, len(fileIDs), err)
+		}
+		pf, err := os.Open(partPath)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, pf)
+		pf.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// اجرای بکاپ (همه‌ی مقصدهای فعال) + prune + بازیابی
+// ---------------------------------------------------------------------
+
+// runBackupNow یک آرشیو تازه می‌سازد و به تمام مقصدهای فعال آپلود می‌کند.
+// cadence یکی از hourly/daily/monthly/manual است (فقط برای اسم‌گذاری/نگهداری).
+func runBackupNow(cadence string) (results map[string]string, err error) {
+	backupRunMu.Lock()
+	defer backupRunMu.Unlock()
+
+	results = map[string]string{}
+	paths := backupAllPaths()
+
+	tmpDir, err := os.MkdirTemp("", "singbox-backup-")
+	if err != nil {
+		return results, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	base := backupArchiveBaseName(cadence)
+	rawPath := filepath.Join(tmpDir, base+".tar.gz")
+	if err := backupCreateTarGz(rawPath, paths); err != nil {
+		return results, fmt.Errorf("failed to build archive: %w", err)
+	}
+
+	uploadPath := rawPath
+	archiveName := base + ".tar.gz"
+	encrypted := false
+	if pass := getSetting("BACKUP_PASSPHRASE", ""); pass != "" {
+		encPath := filepath.Join(tmpDir, base+".tar.gz.enc")
+		if err := backupEncryptFile(pass, rawPath, encPath); err != nil {
+			return results, fmt.Errorf("failed to encrypt archive: %w", err)
+		}
+		uploadPath = encPath
+		archiveName = base + ".tar.gz.enc"
+		encrypted = true
+	}
+
+	fi, statErr := os.Stat(uploadPath)
+	var size int64
+	if statErr == nil {
+		size = fi.Size()
+	}
+	manifest := map[string]interface{}{
+		"cadence": cadence, "paths": paths, "encrypted": encrypted,
+		"timestamp": time.Now().UTC().Format(time.RFC3339), "size_bytes": size,
+	}
+	manifestPath := filepath.Join(tmpDir, base+".manifest.json")
+	if mb, merr := json.MarshalIndent(manifest, "", "  "); merr == nil {
+		_ = os.WriteFile(manifestPath, mb, 0644)
+	}
+	manifestName := base + ".manifest.json"
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	if t, ok := backupS3Target(); ok {
+		if err := backupS3Upload(t, archiveName, uploadPath); err != nil {
+			results["s3"] = "خطا: " + err.Error()
+		} else {
+			_ = backupS3Upload(t, manifestName, manifestPath)
+			_ = backupAppendIndexEntry(backupIndexEntry{Cadence: cadence, Destination: "s3", Key: archiveName, ManifestKey: manifestName, Timestamp: now, SizeBytes: size, Encrypted: encrypted, Paths: paths})
+			results["s3"] = "آپلود شد"
+		}
+	}
+	if t, ok := backupR2Target(); ok {
+		if err := backupS3Upload(t, archiveName, uploadPath); err != nil {
+			results["cloudflare_r2"] = "خطا: " + err.Error()
+		} else {
+			_ = backupS3Upload(t, manifestName, manifestPath)
+			_ = backupAppendIndexEntry(backupIndexEntry{Cadence: cadence, Destination: "cloudflare_r2", Key: archiveName, ManifestKey: manifestName, Timestamp: now, SizeBytes: size, Encrypted: encrypted, Paths: paths})
+			results["cloudflare_r2"] = "آپلود شد"
+		}
+	}
+	if backupBoolSetting("BACKUP_TELEGRAM_ENABLED", false) {
+		botToken := getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "")
+		chatID := getSetting("BACKUP_TELEGRAM_CHAT_ID", "")
+		if botToken == "" || chatID == "" {
+			results["telegram"] = "خطا: bot token یا chat id تنظیم نشده"
+		} else {
+			fids, mids, err := telegramUploadFile(botToken, chatID, uploadPath, archiveName)
+			if err != nil {
+				results["telegram"] = "خطا: " + err.Error()
+			} else {
+				_ = backupAppendIndexEntry(backupIndexEntry{
+					Cadence: cadence, Destination: "telegram", Key: strings.Join(fids, ","),
+					TelegramMsgIDs: mids, Timestamp: now, SizeBytes: size, Encrypted: encrypted, Paths: paths,
+				})
+				results["telegram"] = fmt.Sprintf("آپلود شد (%d قطعه)", len(fids))
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return results, fmt.Errorf("هیچ مقصد فعالی برای بکاپ تنظیم نشده")
+	}
+
+	if cadence != "manual" {
+		for _, cc := range backupCadences() {
+			if cc.Name == cadence {
+				backupPruneDestinations(cadence, cc.Keep)
+			}
+		}
+	}
+	return results, nil
+}
+
+func backupPruneDestinations(cadence string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	for _, dest := range []string{"s3", "cloudflare_r2", "telegram"} {
+		backupIndexMu.Lock()
+		idx := backupLoadIndex()
+		var matched []int
+		for i, e := range idx.Entries {
+			if e.Destination == dest && e.Cadence == cadence {
+				matched = append(matched, i)
+			}
+		}
+		if len(matched) <= keep {
+			backupIndexMu.Unlock()
+			continue
+		}
+		sort.Slice(matched, func(a, b int) bool {
+			return idx.Entries[matched[a]].Timestamp > idx.Entries[matched[b]].Timestamp
+		})
+		toDelete := map[int]bool{}
+		for _, i := range matched[keep:] {
+			toDelete[i] = true
+		}
+		remaining := make([]backupIndexEntry, 0, len(idx.Entries))
+		var deleted []backupIndexEntry
+		for i, e := range idx.Entries {
+			if toDelete[i] {
+				deleted = append(deleted, e)
+				continue
+			}
+			remaining = append(remaining, e)
+		}
+		idx.Entries = remaining
+		_ = backupSaveIndex(idx)
+		backupIndexMu.Unlock()
+
+		for _, e := range deleted {
+			backupDeleteRemote(e)
+		}
+	}
+}
+
+func backupDeleteRemote(e backupIndexEntry) {
+	switch e.Destination {
+	case "s3":
+		if t, ok := backupS3Target(); ok {
+			_ = backupS3Delete(t, e.Key)
+			if e.ManifestKey != "" {
+				_ = backupS3Delete(t, e.ManifestKey)
+			}
+		}
+	case "cloudflare_r2":
+		if t, ok := backupR2Target(); ok {
+			_ = backupS3Delete(t, e.Key)
+			if e.ManifestKey != "" {
+				_ = backupS3Delete(t, e.ManifestKey)
+			}
+		}
+	case "telegram":
+		botToken := getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "")
+		chatID := getSetting("BACKUP_TELEGRAM_CHAT_ID", "")
+		if botToken == "" {
+			return
+		}
+		for _, mid := range e.TelegramMsgIDs {
+			_ = telegramDeleteMessage(botToken, chatID, mid)
+		}
+	}
+}
+
+// restoreBackupEntry آرشیو یک entry مشخص از ایندکس را دانلود، در صورت نیاز
+// رمزگشایی، و روی مسیرهای مطلق اصلی extract می‌کند (فایل‌های موجود overwrite می‌شوند).
+func restoreBackupEntry(e backupIndexEntry) error {
+	tmpDir, err := os.MkdirTemp("", "singbox-restore-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	downloaded := filepath.Join(tmpDir, "archive.download")
+	switch e.Destination {
+	case "s3":
+		t, ok := backupS3Target()
+		if !ok {
+			return fmt.Errorf("مقصد s3 دیگر فعال/پیکربندی‌شده نیست")
+		}
+		if err := backupS3Download(t, e.Key, downloaded); err != nil {
+			return err
+		}
+	case "cloudflare_r2":
+		t, ok := backupR2Target()
+		if !ok {
+			return fmt.Errorf("مقصد cloudflare_r2 دیگر فعال/پیکربندی‌شده نیست")
+		}
+		if err := backupS3Download(t, e.Key, downloaded); err != nil {
+			return err
+		}
+	case "telegram":
+		botToken := getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "")
+		if botToken == "" {
+			return fmt.Errorf("Telegram bot token دیگر تنظیم نشده")
+		}
+		fids := strings.Split(e.Key, ",")
+		if err := telegramDownloadParts(botToken, fids, downloaded); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("مقصد ناشناخته: %s", e.Destination)
+	}
+
+	tarPath := downloaded
+	if e.Encrypted {
+		pass := getSetting("BACKUP_PASSPHRASE", "")
+		if pass == "" {
+			return fmt.Errorf("این بکاپ رمزگذاری‌شده است اما BACKUP_PASSPHRASE تنظیم نشده")
+		}
+		decPath := filepath.Join(tmpDir, "archive.tar.gz")
+		if err := backupDecryptFile(pass, downloaded, decPath); err != nil {
+			return err
+		}
+		tarPath = decPath
+	}
+	return backupExtractTarGz(tarPath)
+}
+
+// backupLatestEntry جدیدترین entry ایندکس را برمی‌گرداند (بدون فیلتر مقصد/بازه).
+func backupLatestEntry() (backupIndexEntry, bool) {
+	idx := backupLoadIndex()
+	if len(idx.Entries) == 0 {
+		return backupIndexEntry{}, false
+	}
+	best := idx.Entries[0]
+	for _, e := range idx.Entries[1:] {
+		if e.Timestamp > best.Timestamp {
+			best = e
+		}
+	}
+	return best, true
+}
+
+// restoreOnInitIfNeeded دقیقاً همان چیزیه که در init باید "بررسی و اعمال" شود:
+// اگر همه‌ی مسیرهای پیش‌فرض بکاپ (/data و /app/data) خالی/ناموجودند و حداقل
+// یک بکاپ قبلی در ایندکس محلی ثبت شده، آخرین نسخه را خودکار بازیابی می‌کند.
+// عمداً محتاطانه است: اگر داده‌ای از قبل روی دیسک باشد، دست به آن نمی‌زند —
+// یعنی هیچ‌وقت به‌صورت خاموش چیزی را overwrite نمی‌کند مگر واقعاً یک نصب تازه باشد.
+func restoreOnInitIfNeeded() {
+	empty := true
+	for _, p := range backupDefaultPaths() {
+		entries, err := os.ReadDir(p)
+		if err == nil && len(entries) > 0 {
+			empty = false
+			break
+		}
+	}
+	if !empty {
+		return
+	}
+	entry, ok := backupLatestEntry()
+	if !ok {
+		return // نه بکاپ قبلی‌ای هست نه چیزی برای بازیابی — این یعنی واقعاً نصب تازه است
+	}
+	log.Printf("💾 restore-on-init: /data و /app/data خالی هستند؛ بازیابی آخرین بکاپ (%s، مقصد %s، %s)…", entry.Cadence, entry.Destination, entry.Timestamp)
+	if err := restoreBackupEntry(entry); err != nil {
+		log.Printf("⚠️  restore-on-init failed: %v (کانتینر با حالت تازه ادامه می‌دهد)", err)
+		return
+	}
+	log.Println("✅ restore-on-init: بازیابی با موفقیت انجام شد.")
+}
+
+// startBackupScheduler هر دقیقه چک می‌کند کدام بازه (ساعتی/روزانه/ماهانه) از
+// آخرین اجرایش گذشته و لازم است دوباره بکاپ بگیرد. زمان آخرین اجرای هر بازه
+// در همان state.json (EnvOverrides با کلید داخلی BACKUP_LAST_RUN_<cadence>)
+// نگه داشته می‌شود تا بعد از ری‌استارت کانتینر هم حفظ شود.
+func startBackupScheduler() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if !backupAnyDestinationEnabled() {
+				continue
+			}
+			for _, cc := range backupCadences() {
+				if !cc.Enabled {
+					continue
+				}
+				key := "BACKUP_LAST_RUN_" + strings.ToUpper(cc.Name)
+				last := getSetting(key, "")
+				due := true
+				if last != "" {
+					if t, err := time.Parse(time.RFC3339, last); err == nil {
+						due = time.Since(t) >= cc.Period
+					}
+				}
+				if !due {
+					continue
+				}
+				log.Printf("💾 backup scheduler: running %s backup…", cc.Name)
+				results, err := runBackupNow(cc.Name)
+				if err != nil {
+					log.Printf("⚠️  %s backup failed: %v", cc.Name, err)
+					continue
+				}
+				_ = setSetting(key, time.Now().UTC().Format(time.RFC3339))
+				log.Printf("✅ %s backup done: %v", cc.Name, results)
+			}
+		}
+	}()
+}
+
+// ---------------------------------------------------------------------
+// HTTP handlers
+// ---------------------------------------------------------------------
+
+func backupSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	out := map[string]interface{}{
+		"paths_default": backupDefaultPaths(),
+		"paths_extra":   backupExtraPaths(),
+		"passphrase_set": getSetting("BACKUP_PASSPHRASE", "") != "",
+	}
+	cadences := map[string]interface{}{}
+	for _, cc := range backupCadences() {
+		cadences[cc.Name] = map[string]interface{}{"enabled": cc.Enabled, "keep": cc.Keep}
+	}
+	out["cadences"] = cadences
+
+	_, s3ok := backupS3Target()
+	out["s3"] = map[string]interface{}{
+		"enabled": backupBoolSetting("BACKUP_S3_ENABLED", false), "configured": s3ok,
+		"endpoint": getSetting("BACKUP_S3_ENDPOINT", ""), "region": getSetting("BACKUP_S3_REGION", ""),
+		"bucket": getSetting("BACKUP_S3_BUCKET", ""), "prefix": getSetting("BACKUP_S3_PREFIX", ""),
+		"use_ssl": backupBoolSetting("BACKUP_S3_USE_SSL", true),
+		"access_key_set": getSetting("BACKUP_S3_ACCESS_KEY", "") != "", "secret_key_set": getSetting("BACKUP_S3_SECRET_KEY", "") != "",
+	}
+	_, r2ok := backupR2Target()
+	out["cloudflare_r2"] = map[string]interface{}{
+		"enabled": backupBoolSetting("BACKUP_R2_ENABLED", false), "configured": r2ok,
+		"bucket": getSetting("BACKUP_R2_BUCKET", ""), "prefix": getSetting("BACKUP_R2_PREFIX", ""),
+		"access_key_set": getSetting("BACKUP_R2_ACCESS_KEY", "") != "", "secret_key_set": getSetting("BACKUP_R2_SECRET_KEY", "") != "",
+		"cloudflare_token_available": strings.TrimSpace(readStateOrDefault().Cloudflare.APIToken) != "",
+	}
+	out["telegram"] = map[string]interface{}{
+		"enabled": backupBoolSetting("BACKUP_TELEGRAM_ENABLED", false),
+		"bot_token_set": getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "") != "", "chat_id": getSetting("BACKUP_TELEGRAM_CHAT_ID", ""),
+	}
+
+	idx := backupLoadIndex()
+	sort.Slice(idx.Entries, func(i, j int) bool { return idx.Entries[i].Timestamp > idx.Entries[j].Timestamp })
+	if len(idx.Entries) > 100 {
+		idx.Entries = idx.Entries[:100]
+	}
+	out["backups"] = idx.Entries
+
+	jsonResponse(w, http.StatusOK, out)
+}
+
+func updateBackupSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	allowed := map[string]bool{}
+	for _, k := range backupEnvKeys {
+		allowed[k] = true
+	}
+	for key, value := range req {
+		if !allowed[key] {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is not a backup setting", key)})
+			return
+		}
+		if err := setSetting(key, value); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+			return
+		}
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "تنظیمات بکاپ ذخیره شد"})
+}
+
+func backupRunHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cadence string `json:"cadence"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Cadence == "" {
+		req.Cadence = "manual"
+	}
+	results, err := runBackupNow(req.Cadence)
+	if err != nil {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error(), "results": results})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "بکاپ انجام شد", "results": results})
+}
+
+func backupRestoreHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Destination string `json:"destination"`
+		Key         string `json:"key"`
+		Timestamp   string `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	idx := backupLoadIndex()
+	var found *backupIndexEntry
+	for i := range idx.Entries {
+		e := idx.Entries[i]
+		if e.Destination == req.Destination && e.Key == req.Key && e.Timestamp == req.Timestamp {
+			found = &idx.Entries[i]
+			break
+		}
+	}
+	if found == nil {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": "این بکاپ در ایندکس پیدا نشد"})
+		return
+	}
+	if err := restoreBackupEntry(*found); err != nil {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "بازیابی ناموفق: " + err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "بازیابی با موفقیت انجام شد. توصیه می‌شود مدیر را ری‌استارت کنید تا تنظیمات تازه‌بازیابی‌شده بارگذاری شوند."})
+}
+
+func backupCreateR2BucketHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Bucket string `json:"bucket"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	bucket := strings.ToLower(strings.TrimSpace(req.Bucket))
+	if bucket == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "نام bucket لازم است"})
+		return
+	}
+	token, accountID, err := backupResolveCFAccount()
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if _, err := cfAPIRequest(token, http.MethodPost, "/accounts/"+accountID+"/r2/buckets", map[string]interface{}{"name": bucket}); err != nil {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "ساخت bucket ناموفق بود (مطمئن شوید API Token دسترسی «Workers R2 Storage:Edit» دارد): " + err.Error()})
+		return
+	}
+	if err := setSetting("BACKUP_R2_BUCKET", bucket); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "bucket ساخته شد ولی ذخیره‌ی تنظیمات ناموفق بود: " + err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("bucket %q ساخته و به‌عنوان مقصد R2 ست شد. توجه: کلیدهای S3 API (Access Key/Secret Key) این توکن نیستند و باید جدا از R2 → Manage API tokens ساخته و اینجا وارد شوند.", bucket)})
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
@@ -5407,8 +6751,19 @@ func main() {
 		adminToken = persisted
 	}
 
+	// بررسی و اعمال بازیابی خودکار: اگر /data و /app/data خالی‌اند و بکاپ قبلی
+	// در دسترس است، همین‌جا (قبل از ساخت فایل‌های پیش‌فرض/استارت sing-box)
+	// بازیابی می‌شود. باید قبل از ensureDefaultFiles اجرا شود وگرنه آن تابع
+	// خودش template.json/nodes.json خالی می‌سازد و شرط "خالی بودن" را عملاً
+	// از بین می‌برد.
+	restoreOnInitIfNeeded()
+	// اگر state.json تازه‌بازیابی‌شده زیر /data بوده، override های ذخیره‌شده
+	// از UI (شامل خودِ تنظیمات بکاپ) را دوباره بارگذاری کن.
+	loadEnvOverridesCache()
+
 	ensureDefaultFiles()
 	autoDownloadSingBoxIfMissing()
+	startBackupScheduler()
 
 	if getAdminToken() == "" {
 		log.Println("⚠️  ADMIN_TOKEN تنظیم نشده — API مدیریت بدون احراز هویت است. برای امنیت آن را از صفحه‌ی Settings یا با export ADMIN_TOKEN=... ست کنید.")
@@ -5481,6 +6836,10 @@ func main() {
 	http.HandleFunc("/api/delete_warp_group", requireAuth(requireMethod(http.MethodPost, deleteWarpGroupHandler)))
 	http.HandleFunc("/api/edit_warp_group", requireAuth(requireMethod(http.MethodPost, editWarpGroupHandler)))
 	http.HandleFunc("/api/delete_warp_node", requireAuth(requireMethod(http.MethodPost, deleteWarpNodeHandler)))
+	http.HandleFunc("/api/backup/settings", requireAuth(settingsMethodRouter(backupSettingsHandler, updateBackupSettingsHandler)))
+	http.HandleFunc("/api/backup/run", requireAuth(requireMethod(http.MethodPost, backupRunHandler)))
+	http.HandleFunc("/api/backup/restore", requireAuth(requireMethod(http.MethodPost, backupRestoreHandler)))
+	http.HandleFunc("/api/backup/r2/create_bucket", requireAuth(requireMethod(http.MethodPost, backupCreateR2BucketHandler)))
 
 	server := &http.Server{Addr: bindAddr + apiPort}
 
