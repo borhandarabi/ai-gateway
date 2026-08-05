@@ -1,2 +1,2 @@
 #!/command/execlineb -P
-with-contenv ./run.sh
+with-contenv /etc/s6-overlay/s6-rc.d/network-mode-init/run.sh
