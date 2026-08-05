@@ -2112,6 +2112,12 @@ const minimalDefaultTemplate = `{
 // global/auto/direct و ...). فقط در bootstrap نصب تازه به کار می‌رود.
 // __CLASH_SECRET__ در زمان اجرا با یک secret تصادفی جایگزین می‌شود.
 const defaultTemplateRich = `{
+  "log": {
+    "disabled": true,
+    "level": "info",
+    "output": "box.log",
+    "timestamp": true
+  },
   "dns": {
     "final": "local-dns",
     "rules": [
