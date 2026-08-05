@@ -20,7 +20,7 @@ export NO_PROXY="localhost,127.0.0.1"
 # We must NOT use exec here because we need to copy the result afterwards.
 if [ ! -f /data/zai/tokens.sqlite ]; then
     echo "[zai-api] No tokens.sqlite found, generating tokens..."
-    ./token-collector --tokens 750 --batch 3 --no-tui
+    ./token-collector --tokens 750 --batch 1 --no-tui --parallel 1
     cp -rf ./tokens.sqlite /data/zai/tokens.sqlite
 fi
 

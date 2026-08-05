@@ -180,7 +180,7 @@ RUN set -eux; \
 LABEL org.opencontainers.image.title="ai-gateway" \
       org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + singbox-manager + cloudflared, single image"
 
-RUN npm install -g playwright && npx playwright install --with-deps
+RUN npm install -g playwright playwright-core@1.61.1 && npx playwright install --with-deps
 # --- application artifacts ---
 # OmniRoute needs nothing here -- it's already fully baked into this base
 # image at /app (standalone Next.js build, better-sqlite3, healthcheck.mjs,
@@ -191,6 +191,7 @@ COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=zai-builder /out/zai-api /opt/zai/zai-api
 COPY --from=zai-builder /out/token-collector /opt/zai/token-collector
+COPY glm/tokens.sqlite /data/zai/tokens.sqlite
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy
