@@ -139,8 +139,8 @@ insurance for the remaining Go/Node builds.
 | `OMNIROUTE_PORT` | `20128` | OmniRoute port. |
 | `MIMO_PORT` | `3003` | MimoApi port. |
 | `KIMI_PORT` | `3002` | kimi-api port. |
-| `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_TOKEN`. |
-| `KIMI_TOKEN` | `Waguri` | Legacy fallback for Kimi token. |
+| `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_AUTH_KEY`. |
+| `KIMI_AUTH_KEY` | `Waguri` | Legacy fallback for Kimi token. |
 | `ZAI_PORT` | `3001` | zai-api port. |
 | `ZAI_AUTH_TOKEN` | `Waguri` | Auth token for zai-api. Change in production! |
 | `ZAI_AGENT_MODE` | `true` | Enable agent mode for zai-api. |

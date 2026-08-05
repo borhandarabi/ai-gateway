@@ -1,6 +1,7 @@
 #!/command/with-contenv bash
 set -e
 mkdir -p /data/grok2api
+mkdir -p /data/grok2api/media
 export TZ="${TZ:-Asia/Shanghai}"
 
 # Ensure data dir is writable by grok2api user
@@ -11,7 +12,7 @@ chmod 755 /data/grok2api/
 if [ ! -f /data/grok2api/config.yaml ]; then
   echo "[grok2api] No config found, generating default..."
   KEY=$(head -c 32 /dev/urandom | base64)
-  SECRET=$(head -c 32 /dev/urandom)
+  SECRET=$(openssl rand -hex 32)
   cat > /data/grok2api/config.yaml << EOF
 server:
   listen: "${BIND_ADDR:-0.0.0.0}:${GROK2API_PORT:-3004}"

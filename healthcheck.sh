@@ -26,8 +26,8 @@ check "singbox"    "http://127.0.0.1:${SINGBOX_API_PORT:-9090}/version"
 
 # kimi-api: only check if KIMI_ACCESS_TOKEN is set to a real value
 # (when using placeholder, kimi-api stays idle via sleep infinity)
-KIMI_TOKEN="${KIMI_ACCESS_TOKEN:-${KIMI…:-}}"
-if [ -n "${KIMI_TOKEN}" ] && [ "${KIMI_TOKEN}" != "Waguri" ]; then
+KIMI_AUTH_KEY="${KIMI_ACCESS_TOKEN:-${KIMI…:-}}"
+if [ -n "${KIMI_ACCESS_TOKEN}" ]; then
   check "kimi-api" "http://127.0.0.1:${KIMI_PORT:-3002}/"
 fi
 
