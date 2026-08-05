@@ -36,7 +36,29 @@ bootstrapAdmin:
   password: admin123456
 
 frontend:
-  staticPath: "./frontend/dist"
+  staticPath: "/opt/grok2api/frontend/dist"
+
+qualityGuard:
+  enabled: false
+  model: "grok-4.5"
+  mode: hybrid # passive | active | hybrid
+  activeInterval: 30m
+  passivePollInterval: 5s
+  softTPS: 500
+  hardTPS: 1000
+  consecutiveSoft: 2
+  consecutiveErrors: 2
+  quarantineDuration: 5m
+  noAccountBackoff: 5m
+  minimumHealthyNodes: 3
+  maxOutputTokens: 384
+  failClosed: false
+  minimumGenerationWindow: 1s
+  rotationURL: ""
+  rotationToken: ""
+  rotationTimeout: 45s
+  nodeIDs: []
+  rotatableNodeIDs: []
 
 database:
   driver: sqlite # sqlite | postgres
@@ -95,5 +117,4 @@ fi
 # to /app/config.yaml which conflicts with OmniRoute's /app directory.
 # Instead we run grok2api directly as the grok2api user via su-exec.
 cd /opt/grok2api
-exec su-exec grok2api:grok2api /opt/grok2api/grok2api \
-  --config "/data/grok2api/config.yaml"
+exec su-exec grok2api:grok2api /opt/grok2api/grok2api --config "/data/grok2api/config.yaml"
