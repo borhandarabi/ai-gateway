@@ -2097,14 +2097,20 @@ const minimalDefaultTemplate = `{
     "rules": []
   },
   "experimental": {
-    "clash_api": {
-      "external_controller": "127.0.0.1:__CLASH_API_PORT__",
-      "external_ui": "ui",
-      "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
-      "secret": "",
-      "default_mode": "rule"
-    }
-  }
+        "clash_api": {
+            "external_controller": "127.0.0.1:__CLASH_API_PORT__",
+            "external_ui": "metacubexd",
+            "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
+            "external_ui_download_detour": "direct",
+            "default_mode": "rule"
+        },
+        "cache_file": {
+            "enabled": true,
+            "path": "cache.db",
+            "store_fakeip": true,
+            "store_rdrc": true
+        }
+	}
 }`
 
 // defaultTemplateRich پایه‌ی کامل و آماده‌ی تولید است — دقیقاً همان ساختاری که
@@ -2113,9 +2119,8 @@ const minimalDefaultTemplate = `{
 // __CLASH_SECRET__ در زمان اجرا با یک secret تصادفی جایگزین می‌شود.
 const defaultTemplateRich = `{
   "log": {
-    "disabled": true,
-    "level": "info",
-    "output": "box.log",
+    "disabled": false,
+    "level": "fatal",
     "timestamp": true
   },
   "dns": {
@@ -2125,18 +2130,12 @@ const defaultTemplateRich = `{
         "action": "route",
         "clash_mode": "Global",
         "server": "proxy-dns",
-        "source_ip_cidr": [
-          "172.19.0.0/30",
-          "fdfe:dcba:9876::1/126"
-        ]
+        "source_ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::1/126"]
       },
       {
         "action": "route",
         "server": "proxy-dns",
-        "source_ip_cidr": [
-          "172.19.0.0/30",
-          "fdfe:dcba:9876::1/126"
-        ]
+        "source_ip_cidr": ["172.19.0.0/30", "fdfe:dcba:9876::1/126"]
       },
       {
         "action": "route",
@@ -2145,9 +2144,7 @@ const defaultTemplateRich = `{
       },
       {
         "action": "route",
-        "rule_set": [
-          "geosite-ir"
-        ],
+        "rule_set": ["geosite-ir"],
         "server": "direct-dns"
       }
     ],
@@ -2175,15 +2172,19 @@ const defaultTemplateRich = `{
   "endpoints": [],
   "experimental": {
     "clash_api": {
-      "access_control_allow_origin": [
-        "*"
-      ],
+      "access_control_allow_origin": ["*"],
       "access_control_allow_private_network": true,
-      "default_mode": "rule",
       "external_controller": "127.0.0.1:__CLASH_API_PORT__",
-      "external_ui": "ui",
+      "external_ui": "metacubexd",
       "external_ui_download_url": "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
-      "secret": "__CLASH_SECRET__"
+      "external_ui_download_detour": "direct",
+      "default_mode": "rule"
+    },
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_fakeip": true,
+      "store_rdrc": true
     }
   },
   "inbounds": [
@@ -2208,18 +2209,13 @@ const defaultTemplateRich = `{
   ],
   "outbounds": [
     {
-      "outbounds": [
-        "auto",
-        "direct"
-      ],
+      "outbounds": ["auto", "direct"],
       "tag": "proxy",
       "type": "selector"
     },
     {
       "interval": "10m",
-      "outbounds": [
-        "direct"
-      ],
+      "outbounds": ["direct"],
       "tag": "auto",
       "tolerance": 50,
       "type": "urltest",
@@ -2277,16 +2273,12 @@ const defaultTemplateRich = `{
       },
       {
         "action": "route",
-        "inbound": [
-          "in-auto"
-        ],
+        "inbound": ["in-auto"],
         "outbound": "auto"
       },
       {
         "action": "route",
-        "inbound": [
-          "in-direct"
-        ],
+        "inbound": ["in-direct"],
         "outbound": "direct"
       },
       {
@@ -2315,9 +2307,7 @@ const defaultTemplateRich = `{
       },
       {
         "action": "reject",
-        "rule_set": [
-          "geosite-ads"
-        ]
+        "rule_set": ["geosite-ads"]
       }
     ]
   }
