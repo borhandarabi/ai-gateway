@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"mime/multipart"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -57,6 +59,10 @@ var (
 	bindAddr = getEnvDefault("BIND_ADDR", "127.0.0.1")
 	apiPort  = ":" + getEnvDefault("API_PORT", "5000")
 
+	// پورت reverse proxy عمومی (پیش‌فرض 80) که DockerServiceها را با پیشوند
+	// مسیر (/name/...) و پنل مدیریت را روی "/" سرو می‌کند.
+	proxyPort = getEnvDefault("PROXY_PORT", "80")
+
 	// توکن مدیریتی اختیاری. اگر خالی باشد API بدون احراز هویت است (فقط برای dev/local).
 	// می‌تواند بعداً از داخل UI (صفحه‌ی Settings) نیز تغییر و در state.json ذخیره شود.
 	adminToken   = os.Getenv("ADMIN_TOKEN")
@@ -83,7 +89,7 @@ func getEnvDefault(key, def string) string {
 // managedEnvKeys لیست کلیدهای مبتنی‌بر env هستند که از صفحه‌ی Settings هم قابل
 // مدیریت‌اند (نه فقط با export کردن قبل از اجرا).
 var managedEnvKeys = []string{
-	"BIND_ADDR", "API_PORT",
+	"BIND_ADDR", "API_PORT", "PROXY_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR",
 }
@@ -109,7 +115,7 @@ var backupEnvKeys = []string{
 
 // envKeysRequiringRestart کلیدهایی هستند که چون روی socket شنود HTTP یا متغیرهای
 // سراسری خوانده‌شده در ابتدای main() اثر می‌گذارند، فقط از ری‌استارت بعدی مدیر اعمال می‌شوند.
-var envKeysRequiringRestart = map[string]bool{"BIND_ADDR": true, "API_PORT": true}
+var envKeysRequiringRestart = map[string]bool{"BIND_ADDR": true, "API_PORT": true, "PROXY_PORT": true}
 
 var (
 	envOverridesMu    sync.RWMutex
@@ -439,7 +445,6 @@ const htmlContent = `<!DOCTYPE html>
     border-radius:var(--radius-sm);padding:8px 10px;font-size:13px;outline:none;
   }
   select.node-select:focus{border-color:var(--accent);}
-  #appsTabs .btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 
   table.data td.live-outbound{min-width:190px;}
   table.data td.live-outbound select.node-select{width:100%;min-width:0;padding:6px 9px;font-size:12.5px;}
@@ -550,10 +555,6 @@ const htmlContent = `<!DOCTYPE html>
       <button class="navitem" data-page="dashboard" onclick="showPage('dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
         Dashboard
-      </button>
-      <button class="navitem" data-page="apps" onclick="showPage('apps')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-        Apps <span class="count" id="countApps">0</span>
       </button>
       <button class="navitem" data-page="raw" onclick="showPage('raw')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 17l-5-5 5-5M16 7l5 5-5 5"/></svg>
@@ -786,6 +787,7 @@ const htmlContent = `<!DOCTYPE html>
             <div class="field">
               <label for="cfTunnelToken">Tunnel Token <span class="hint">(from Zero Trust → Networks → Tunnels)</span></label>
               <input type="password" id="cfTunnelToken" placeholder="Leave empty to keep the current token" autocomplete="new-password">
+              <p class="hint" style="margin-top:6px;">Point a single ingress rule for your hostname at <span class="mono">http://127.0.0.1:<span id="cfTunnelTokenProxyPort">80</span></span> — the built-in reverse proxy fans it out to the panel ("/") and every Docker web app ("/&lt;name&gt;/"). No per-service rule needed.</p>
             </div>
             <div class="field">
               <label for="cfDashboardPublicUrl">Clash dashboard public URL <span class="hint">(e.g. https://dash.example.com — the hostname you routed to the Clash API in your own ingress)</span></label>
@@ -804,19 +806,15 @@ const htmlContent = `<!DOCTYPE html>
 
         <div class="panel">
           <div class="panel-head"><h2>Docker web apps</h2></div>
-          <p class="sub">Each entry gets its own tab under "Apps" (shown as an iframe) and, in Full API Token mode, its own public subdomain — e.g. zai/grok/deepseek. <span class="hint">In Tunnel Token mode (manual ingress) or when there's no tunnel at all, set "Public URL" below if the app isn't reachable at this panel's own hostname.</span></p>
+          <p class="sub">Each entry is reachable at <span class="mono">&lt;this panel's public URL&gt;/&lt;name&gt;/...</span> through the built-in reverse proxy — no per-service tunnel setup, no manual ingress, works the same in every Cloudflare mode (Full API Token, Tunnel Token, or Quick Tunnel).</p>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
-              <label for="dsName">Name <span class="hint">(used as subdomain, lowercase)</span></label>
-              <input type="text" id="dsName" placeholder="e.g. zai">
+              <label for="dsName">Name <span class="hint">(used as the URL path prefix, lowercase)</span></label>
+              <input type="text" id="dsName" placeholder="e.g. xai">
             </div>
             <div class="field">
               <label for="dsPort">Local port</label>
               <input type="number" id="dsPort" placeholder="3000" min="1" max="65535">
-            </div>
-            <div class="field">
-              <label for="dsPublicUrl">Public URL <span class="hint">(optional override)</span></label>
-              <input type="text" id="dsPublicUrl" placeholder="https://zai.example.com">
             </div>
             <button class="btn btn-primary" onclick="addDockerService()">Add</button>
           </div>
@@ -915,23 +913,6 @@ const htmlContent = `<!DOCTYPE html>
         </div>
         <div class="panel" style="padding:0;overflow:hidden;">
           <iframe id="dashboardFrame" style="width:100%;height:78vh;border:0;display:block;" referrerpolicy="no-referrer"></iframe>
-        </div>
-      </section>
-
-      <!-- ============ APPS (Docker web frontends) ============ -->
-      <section class="page" id="page-apps">
-        <div class="page-head">
-          <div>
-            <h1>Apps</h1>
-            <p>Frontends of Docker web apps configured in Settings (e.g. zai, grok, deepseek).</p>
-          </div>
-        </div>
-        <div id="appsTabs" class="row" style="margin-bottom:12px;"></div>
-        <div class="panel" id="appsEmpty" style="display:none;">
-          <p class="sub">No Docker web apps configured yet. Add one from the Settings page.</p>
-        </div>
-        <div class="panel" id="appsFrameWrap" style="padding:0;overflow:hidden;display:none;">
-          <iframe id="appsFrame" style="width:100%;height:78vh;border:0;display:block;" referrerpolicy="no-referrer"></iframe>
         </div>
       </section>
 
@@ -1095,7 +1076,6 @@ const htmlContent = `<!DOCTYPE html>
     if (name === 'raw') ensureRawEditors();
     if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadEnvSettings(); loadBackupSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
-    if (name === 'apps') loadAppsTabs();
   };
   window.toggleSidebar = function(){
     document.getElementById('sidebar').classList.toggle('open');
@@ -1655,6 +1635,8 @@ const htmlContent = `<!DOCTYPE html>
       var box = document.getElementById('adminTokenStatus');
       box.innerHTML = '';
       box.appendChild(statCard('Status', data.admin_token_set ? 'Protected' : 'Not set', data.admin_token_set ? 'var(--success)' : 'var(--danger)'));
+      var portEl = document.getElementById('cfTunnelTokenProxyPort');
+      if (portEl && data.proxy_port) portEl.textContent = data.proxy_port;
     } catch (err){
       showMessage('Failed to load settings: ' + err.message, 'danger');
     }
@@ -1743,7 +1725,7 @@ const htmlContent = `<!DOCTYPE html>
       updateCloudflareModeUI();
       if (data.zone_name) document.getElementById('cfZoneName').value = data.zone_name;
       document.getElementById('cfDashboardPublicUrl').value = data.dashboard_public_url || '';
-      cfInfoPromise = Promise.resolve(data); // همین پاسخ را برای resolveServicePublicUrl/loadDashboardFrame هم کش کن
+      cfInfoPromise = Promise.resolve(data); // همین پاسخ را برای resolvePublicBaseUrl/loadDashboardFrame هم کش کن
 
       var routesBox = document.getElementById('cfRoutes');
       routesBox.innerHTML = '';
@@ -1796,10 +1778,10 @@ const htmlContent = `<!DOCTYPE html>
   };
 
   // -----------------------------------------------------------------
-  // resolveServicePublicUrl/loadDashboardFrame یک نمونه از پاسخ
-  // /api/cloudflare/settings را کش می‌کنند تا هر بار که تب Apps/Dashboard باز
-  // می‌شود دوباره fetch نزنند؛ هر جا mode/دامنه/سرویس‌ها ممکن است عوض شده باشد
-  // (ذخیره‌ی تنظیمات Cloudflare، افزودن/حذف Docker service) کش را invalidate می‌کنیم.
+  // getCloudflareInfo/loadDashboardFrame یک نمونه از پاسخ /api/cloudflare/settings
+  // را کش می‌کنند تا هر بار که Settings/Dashboard باز می‌شود دوباره fetch نزنند؛
+  // هر جا mode/دامنه/سرویس‌ها ممکن است عوض شده باشد (ذخیره‌ی تنظیمات Cloudflare،
+  // افزودن/حذف Docker service) کش را invalidate می‌کنیم.
   // -----------------------------------------------------------------
   var cfInfoPromise = null;
   function getCloudflareInfo(){
@@ -1821,8 +1803,24 @@ const htmlContent = `<!DOCTYPE html>
     }
   }
 
+  // resolvePublicBaseUrl آدرس پایه‌ی عمومی فعلی (بدون "/" انتهایی) را برمی‌گرداند
+  // — همان چیزی که reverse proxy محلی روی پورت proxyPort با آن در دسترس است.
+  // در حالت api_token، پنل روی یک ساب‌دامین جدا (panel.<domain>) است در حالی که
+  // خودِ DockerServiceها روی ریشه‌ی دامنه (service_hosts.apps) سرو می‌شوند —
+  // پس آن‌جا باید صریحاً از service_hosts.apps استفاده کرد. در بقیه‌ی حالت‌ها
+  // (quick / tunnel_token / بدون تونل) پنل و سرویس‌ها روی همان یک origin هستند،
+  // پس همان window.location.origin که همین الان پنل با آن باز شده درست است.
+  async function resolvePublicBaseUrl(){
+    var cf = await getCloudflareInfo();
+    if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts.apps){
+      return 'https://' + cf.service_hosts.apps;
+    }
+    return window.location.origin;
+  }
+
   // -----------------------------------------------------------------
-  // Docker web apps (zai/grok/deepseek/...): Settings CRUD + Apps tabs
+  // Docker web apps (xai/kimi/...): هر سرویس زیر <resolvePublicBaseUrl()>/<name>/
+  // از طریق reverse proxy محلی در دسترس است — مستقل از mode تونل.
   // -----------------------------------------------------------------
   async function loadDockerServices(){
     try {
@@ -1835,21 +1833,25 @@ const htmlContent = `<!DOCTYPE html>
         body.innerHTML = '<tr class="empty-row"><td colspan="4">No Docker web apps added yet.</td></tr>';
         return services;
       }
+      var base = await resolvePublicBaseUrl();
       body.innerHTML = '';
       services.forEach(function(s){
         var tr = document.createElement('tr');
         var tdName = document.createElement('td'); tdName.textContent = s.name;
         var tdPort = document.createElement('td'); tdPort.className = 'mono'; tdPort.textContent = s.port;
-        var tdUrl = document.createElement('td'); tdUrl.className = 'mono'; tdUrl.textContent = s.public_url || 'auto';
+        var url = base + '/' + s.name + '/';
+        var tdUrl = document.createElement('td'); tdUrl.className = 'mono';
+        var link = document.createElement('a');
+        link.href = url; link.textContent = url; link.target = '_blank'; link.rel = 'noreferrer';
+        tdUrl.appendChild(link);
         var tdAct = document.createElement('td');
         var delBtn = document.createElement('button');
         delBtn.className = 'btn btn-danger btn-sm';
         delBtn.textContent = 'Delete';
         delBtn.onclick = function(){
-          askConfirm('Remove ' + s.name + '?', 'This removes its Apps tab and (if Full API Token mode is on) its public route.', function(){
+          askConfirm('Remove ' + s.name + '?', 'This removes its public route at ' + url, function(){
             api('/api/delete_docker_service', { name: s.name }).then(function(data){
               showMessage(data.message || 'Removed', 'success');
-              cfInfoPromise = null; // ست سرویس‌ها عوض شد؛ نگاشت هاست‌نیم‌ها باید دوباره خوانده شود
               loadDockerServices();
             }).catch(function(err){ showMessage(err.message, 'danger'); });
           });
@@ -1869,83 +1871,17 @@ const htmlContent = `<!DOCTYPE html>
   window.addDockerService = function(){
     var name = document.getElementById('dsName').value.trim().toLowerCase();
     var port = parseInt(document.getElementById('dsPort').value, 10);
-    var publicUrl = document.getElementById('dsPublicUrl').value.trim();
     if (!name){ showMessage('Name is required', 'danger'); return; }
     if (isNaN(port) || port < 1 || port > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
-    api('/api/add_docker_service', { name: name, port: port, public_url: publicUrl }).then(function(data){
+    api('/api/add_docker_service', { name: name, port: port }).then(function(data){
       showMessage(data.message || 'Added', 'success');
       document.getElementById('dsName').value = '';
       document.getElementById('dsPort').value = '';
-      document.getElementById('dsPublicUrl').value = '';
-      cfInfoPromise = null; // ست سرویس‌ها عوض شد؛ نگاشت هاست‌نیم‌ها باید دوباره خوانده شود
       loadDockerServices();
     }).catch(function(err){
       showMessage(err.message, 'danger');
     });
   };
-
-  var appsFrameTimeout = null;
-  async function loadAppsTabs(){
-    var services = await loadDockerServices();
-    document.getElementById('countApps').textContent = services.length;
-    var tabsBox = document.getElementById('appsTabs');
-    var emptyBox = document.getElementById('appsEmpty');
-    var frameWrap = document.getElementById('appsFrameWrap');
-    tabsBox.innerHTML = '';
-    if (!services.length){
-      emptyBox.style.display = '';
-      frameWrap.style.display = 'none';
-      return;
-    }
-    emptyBox.style.display = 'none';
-    frameWrap.style.display = '';
-    services.forEach(function(s, idx){
-      var btn = document.createElement('button');
-      btn.className = 'btn btn-ghost btn-sm' + (idx === 0 ? ' active' : '');
-      btn.textContent = s.name;
-      btn.onclick = function(){
-        document.querySelectorAll('#appsTabs .btn').forEach(function(b){ b.classList.remove('active'); });
-        btn.classList.add('active');
-        showAppFrame(s);
-      };
-      tabsBox.appendChild(btn);
-    });
-    showAppFrame(services[0]);
-  }
-  window.loadAppsTabs = loadAppsTabs;
-
-  // resolveServicePublicUrl آدرس واقعیِ قابل‌دسترسی این Docker service را برمی‌گرداند.
-  // ترتیب اولویت:
-  //   ۱) override دستی service.public_url (کاربر خودش در Settings ست کرده)
-  //   ۲) هاست‌نیم واقعی‌ای که تونل Cloudflare در حالت api_token برای این سرویس ساخته
-  //      (بدون پورت، چون تونل روی 443 با SNI/هاست‌نیم روت می‌کند، نه با پورت محلی)
-  //   ۳) حالت quick: Docker serviceها اصلاً تونل نمی‌شوند → null (پیام مناسب نشان داده می‌شود)
-  //   ۴) در غیر این صورت (بدون تونل، دسترسی مستقیم با IP/دامنه‌ی متصل به IP): همان
-  //      رفتار قدیمی hostname:port که فقط برای این حالت واقعاً درست است
-  async function resolveServicePublicUrl(service){
-    if (service.public_url){
-      return service.public_url.replace(/\/+$/, '') + (service.path || '/');
-    }
-    var cf = await getCloudflareInfo();
-    if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts[service.name]){
-      return 'https://' + cf.service_hosts[service.name] + (service.path || '/');
-    }
-    if (cf.mode === 'quick'){
-      return null;
-    }
-    return 'http://' + window.location.hostname + ':' + service.port + (service.path || '/');
-  }
-
-  async function showAppFrame(service){
-    var frame = document.getElementById('appsFrame');
-    var url = await resolveServicePublicUrl(service);
-    if (!url){
-      frame.removeAttribute('src');
-      showMessage('"' + service.name + '" has no public route under a Quick Tunnel. Switch to Full API Token mode, or set a Public URL for it in Settings.', 'danger');
-      return;
-    }
-    frame.src = url;
-  }
 
   // -----------------------------------------------------------------
   // Dashboard (metacubexd): self-hosted via sing-box external_ui first,
@@ -1957,6 +1893,7 @@ const htmlContent = `<!DOCTYPE html>
   var envSettingLabels = {
     BIND_ADDR: 'Bind address (needs manager restart)',
     API_PORT: 'API port (needs manager restart)',
+    PROXY_PORT: 'Public reverse proxy port (needs manager restart)',
     SINGBOX_PATH: 'sing-box binary path override',
     SINGBOX_VERSION: 'sing-box default version',
     SINGBOX_INSTALL_DIR: 'sing-box install directory',
@@ -2254,19 +2191,13 @@ func writeJSONAtomic(filename string, data interface{}) error {
 // state.json — متادیتای داخلی خود مدیر (کدام گروه WARP پیش‌فرض است و غیره).
 // این فایل هرگز به sing-box داده نمی‌شود، فقط برای منطق داخلی برنامه است.
 // ---------------------------------------------------------------------
-// DockerService یک وب‌سرویس جدا (کانتینر Docker با یک فرانت وب، مثل zai/grok/deepseek)
-// را نشان می‌دهد که هم به‌صورت iframe در پنل نمایش داده می‌شود و هم (در حالت api_token)
-// یک ساب‌دامین عمومی از طریق تونل Cloudflare می‌گیرد.
+// DockerService یک وب‌سرویس جدا (کانتینر Docker، مثل zai/grok/deepseek) را نشان
+// می‌دهد که همیشه — مستقل از mode تونل Cloudflare — زیر پیشوند مسیر "/" + Name
+// روی reverse proxy محلی (پورت proxyPort، پیش‌فرض 80) در دسترس است. آدرس عمومی
+// همیشه قطعی است: <دامنه یا هاست‌نیم فعلی>/<Name>/...  — نیازی به override دستی نیست.
 type DockerService struct {
-	Name string `json:"name"`           // اسم/ساب‌دامین، مثل "zai"
-	Port int    `json:"port"`           // پورتی که کانتینر روی هاست منتشر کرده، مثل 3000
-	Path string `json:"path,omitempty"` // مسیر اختیاری، پیش‌فرض "/"
-	// PublicURL آدرس عمومی این سرویس را دستی override می‌کند. لازم است وقتی مدیر
-	// نمی‌تواند هاست‌نیم واقعی را حدس بزند: حالت tunnel_token (ingress دستی توسط
-	// کاربر) یا هر ریورس‌پروکسی/تونل دیگری غیر از حالت api_token. اگر خالی باشد،
-	// فرانت‌اند بر اساس mode فعلی تونل Cloudflare حدس می‌زند (به resolveServicePublicUrl
-	// در htmlContent مراجعه کنید).
-	PublicURL string `json:"public_url,omitempty"`
+	Name string `json:"name"` // پیشوند مسیر عمومی، مثل "zai" → /zai/*
+	Port int    `json:"port"` // پورتی که کانتینر روی 127.0.0.1 منتشر کرده، مثل 3000
 }
 
 // CloudflareConfig تنظیمات تونل Cloudflare را نگه می‌دارد. سه حالت پشتیبانی می‌شود:
@@ -3478,9 +3409,13 @@ func getClashAPIAddr() (string, error) {
 	return "127.0.0.1:9090", nil
 }
 
-// computeTunnelRoutes فهرست ingress را می‌سازد: پنل مدیریت + داشبورد Clash + همه‌ی
-// DockerServiceها (zai/grok/deepseek و غیره). عمداً پروکسی‌های جدول Services
-// (سینگ‌باکس mixed inbound) اینجا نیستند — طبق تصمیم صریح شما فقط پروکسی‌ها private می‌مانند.
+// computeTunnelRoutes فهرست ingress را می‌سازد: پنل مدیریت + داشبورد Clash + یک
+// route واحد برای کل دامنه به‌سمت reverse proxy محلی (پورت proxyPort). دیگر
+// به‌ازای هر DockerService یک ingress/DNS جدا لازم نیست — تفکیک سرویس‌ها
+// (zai/grok/deepseek و غیره) حالا با پیشوند مسیر و داخل خودِ reverse proxy
+// (بخش "Reverse proxy عمومی") انجام می‌شود، نه در ingress تونل. عمداً
+// پروکسی‌های جدول Services (سینگ‌باکس mixed inbound) اینجا نیستند — طبق
+// تصمیم صریح شما فقط پروکسی‌ها private می‌مانند.
 func computeTunnelRoutes(state AppState) []ingressRoute {
 	domain := strings.TrimSuffix(strings.TrimSpace(state.Cloudflare.ZoneName), ".")
 	if domain == "" {
@@ -3488,16 +3423,10 @@ func computeTunnelRoutes(state AppState) []ingressRoute {
 	}
 	routes := []ingressRoute{
 		{Key: "panel", Hostname: "panel." + domain, Service: "http://127.0.0.1" + apiPort},
+		{Key: "apps", Hostname: domain, Service: "http://127.0.0.1:" + proxyPort},
 	}
 	if clashAddr, err := getClashAPIAddr(); err == nil {
 		routes = append(routes, ingressRoute{Key: "dash", Hostname: "dash." + domain, Service: "http://" + clashAddr})
-	}
-	for _, s := range state.DockerServices {
-		routes = append(routes, ingressRoute{
-			Key:      s.Name,
-			Hostname: s.Name + "." + domain,
-			Service:  fmt.Sprintf("http://127.0.0.1:%d", s.Port),
-		})
 	}
 	return routes
 }
@@ -3722,7 +3651,11 @@ func startCloudflareTunnel() error {
 	case "quick":
 		clashAddr, _ := getClashAPIAddr()
 		targets := map[string]string{
-			"panel": "http://127.0.0.1" + apiPort,
+			// "panel" به reverse proxy محلی (نه مستقیم به apiPort) اشاره می‌کند: چون
+			// یک Quick Tunnel فقط یک مقصد دارد، این یک هاست‌نیم trycloudflare.com هم
+			// پنل مدیریت (روی "/") و هم همه‌ی DockerServiceها (زیر پیشوند مسیرشان،
+			// مثل "/zai/") را همزمان سرو می‌کند — به cf_push_ingress نیازی نیست.
+			"panel": "http://127.0.0.1:" + proxyPort,
 			"dash":  "http://" + clashAddr,
 		}
 		newURLs := map[string]string{}
@@ -3743,7 +3676,7 @@ func startCloudflareTunnel() error {
 		cfQuickURLsMu.Lock()
 		cfQuickURLs = newURLs
 		cfQuickURLsMu.Unlock()
-		log.Printf("Quick tunnels running: %v (note: quick tunnels only support HTTP targets — Docker service routes need api_token mode)", newURLs)
+		log.Printf("Quick tunnels running: %v (docker services are reachable under the panel URL, e.g. <panel-url>/<service-name>/)", newURLs)
 
 	default:
 		return fmt.Errorf("unknown Cloudflare tunnel mode %q", cfg.Mode)
@@ -3767,26 +3700,11 @@ func stopCloudflared_locked() {
 	cfQuickURLsMu.Unlock()
 }
 
-// syncCloudflareRoutesAsync پس از تغییر DockerServices یا Services، در حالت api_token
-// ingress را در پس‌زمینه به‌روزرسانی می‌کند (بدون این‌که درخواست کاربر را بلاک کند).
-// در حالت‌های دیگر (یا وقتی تونل اصلاً روشن نیست) کاری انجام نمی‌دهد.
-func syncCloudflareRoutesAsync() {
-	go func() {
-		state := readStateOrDefault()
-		if state.Cloudflare.Mode != "api_token" || state.Cloudflare.APIToken == "" || state.Cloudflare.TunnelID == "" {
-			return
-		}
-		routes := computeTunnelRoutes(state)
-		if err := cfPushIngress(state.Cloudflare.APIToken, state.Cloudflare.AccountID, state.Cloudflare.TunnelID, routes); err != nil {
-			log.Printf("syncCloudflareRoutesAsync: failed to push updated ingress: %v", err)
-			return
-		}
-		if err := cfUpsertDNS(state.Cloudflare.APIToken, state.Cloudflare.ZoneID, state.Cloudflare.TunnelID, routes); err != nil {
-			log.Printf("syncCloudflareRoutesAsync: DNS sync had errors: %v", err)
-		}
-		log.Printf("Cloudflare ingress synced (%d routes) after a service change", len(routes))
-	}()
-}
+// نکته: پیش‌تر اینجا یک syncCloudflareRoutesAsync بود که بعد از هر add/delete
+// DockerService، ingress تونل را در پس‌زمینه به‌روزرسانی می‌کرد. چون حالا فقط
+// یک route ثابت ("apps" → 127.0.0.1:proxyPort) برای کل دامنه وجود دارد و
+// افزودن/حذف یک DockerService دیگر ingress را عوض نمی‌کند (رجوع کنید به
+// computeTunnelRoutes و rebuildProxyRoutes)، آن تابع حذف شد.
 
 // ---------------------------------------------------------------------
 // ثبت‌نام حساب WARP
@@ -4782,10 +4700,120 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------
-// وب‌سرویس‌های جدا (Docker): برای نمایش iframe در پنل + مسیر عمومی تونل Cloudflare.
-// اینها مستقل از جدول Services (پروکسی‌های sing-box) هستند و خودشان یک فرانت وب دارند.
+// Reverse proxy عمومی (پورت proxyPort، پیش‌فرض 80): تنها ورودی عمومی برنامه.
+// هر DockerService زیر پیشوند "/" + Name سرو می‌شود؛ هر چیز دیگری (شامل
+// خودِ پنل مدیریت روی "/") به apiPort محلی فوروارد می‌شود. این یعنی چه در
+// حالت quick tunnel (که فقط یک مقصد دارد)، چه tunnel_token، چه api_token،
+// یک هاست‌نیم/تونل واحد کل برنامه را سرو می‌کند — دیگر نیازی به ingress یا
+// DNS جدا به‌ازای هر سرویس نیست.
+// ---------------------------------------------------------------------
+
+// currentProxyMux به‌صورت atomic نگه‌داری می‌شود تا rebuild (بعد از هر
+// add/delete DockerService) بدون قفل‌گرفتن روی مسیر request و بدون downtime
+// انجام شود.
+var currentProxyMux atomic.Pointer[http.ServeMux]
+
+// buildProxyMux جدول مسیر عمومی پورت proxyPort را از روی DockerServiceهای
+// فعلی می‌سازد. هر سرویس با http.StripPrefix پیشوند خودش را از مسیر حذف
+// می‌کند تا upstream دقیقاً همان مسیری را ببیند که برای خودش انتظار دارد
+// (مثلاً "/xai/v1/models" → upstream فقط "/v1/models" را می‌بیند).
+func buildProxyMux(services []DockerService) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	for _, svc := range services {
+		target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", svc.Port))
+		if err != nil {
+			log.Printf("buildProxyMux: skipping %q: %v", svc.Name, err)
+			continue
+		}
+		name := svc.Name
+		proxy := &httputil.ReverseProxy{
+			Rewrite: func(pr *httputil.ProxyRequest) {
+				pr.SetURL(target)
+				pr.Out.Host = target.Host
+			},
+			// FlushInterval=-1 یعنی هر write بلافاصله flush می‌شود — بدون این،
+			// پاسخ‌های stream=true (SSE، مثل OpenAI/Anthropic-style APIها) بافر و
+			// تاخیردار به کلاینت می‌رسند.
+			FlushInterval: -1,
+			ErrorLog:      log.Default(),
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				log.Printf("reverse proxy: /%s -> %s failed: %v", name, target, err)
+				w.WriteHeader(http.StatusBadGateway)
+			},
+		}
+		prefix := "/" + name
+		stripped := http.StripPrefix(prefix, proxy)
+		mux.Handle(prefix+"/", stripped)
+		// درخواست بدون "/" انتهایی را هم پاسخ بده — کلاینت‌های OpenAI/Anthropic-style
+		// base_url را گاهی بدون trailing slash می‌سازند.
+		mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = prefix + "/"
+			stripped.ServeHTTP(w, r2)
+		})
+	}
+
+	// هر مسیر دیگری (شامل ریشه‌ی "/") به پنل مدیریت خودِ همین برنامه می‌رود —
+	// دقیقاً همان چیزی که روی bindAddr:apiPort در حال اجراست.
+	panelTarget, _ := url.Parse("http://127.0.0.1" + apiPort)
+	panelProxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) { pr.SetURL(panelTarget) },
+	}
+	mux.Handle("/", panelProxy)
+
+	return mux
+}
+
+// rebuildProxyRoutes باید بعد از هر add/delete DockerService و در startup
+// صدا زده شود.
+func rebuildProxyRoutes() {
+	state := readStateOrDefault()
+	currentProxyMux.Store(buildProxyMux(state.DockerServices))
+}
+
+func proxyRouterHandler(w http.ResponseWriter, r *http.Request) {
+	mux := currentProxyMux.Load()
+	if mux == nil {
+		http.Error(w, "starting up", http.StatusServiceUnavailable)
+		return
+	}
+	mux.ServeHTTP(w, r)
+}
+
+// reverseProxyServer نگه‌داری می‌شود تا در shutdown برنامه بتوان آن را هم
+// graceful خاموش کرد.
+var reverseProxyServer *http.Server
+
+// startReverseProxyServer تنها ورودی عمومی برنامه را روی 0.0.0.0:proxyPort
+// (برخلاف apiPort که پیش‌فرض فقط 127.0.0.1 است) بالا می‌آورد — چون هم از
+// طریق تونل و هم (در صورت دسترسی مستقیم) باید از بیرون قابل‌رسیدن باشد.
+func startReverseProxyServer() {
+	rebuildProxyRoutes()
+	reverseProxyServer = &http.Server{
+		Addr:    "0.0.0.0:" + proxyPort,
+		Handler: http.HandlerFunc(proxyRouterHandler),
+	}
+	go func() {
+		log.Printf("🌐 Reverse proxy listening on :%s (docker services under /<name>/, everything else → panel)", proxyPort)
+		if err := reverseProxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("reverse proxy server stopped: %v", err)
+		}
+	}()
+}
+
+// ---------------------------------------------------------------------
+// وب‌سرویس‌های جدا (Docker): هر کدام زیر پیشوند مسیر "/" + Name روی reverse
+// proxy محلی (بالا) سرو می‌شوند. اینها مستقل از جدول Services (پروکسی‌های
+// sing-box) هستند.
 // ---------------------------------------------------------------------
 var dockerServiceNameRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+// reservedServiceNames نام‌هایی هستند که نمی‌توان به‌عنوان DockerService ثبت
+// کرد چون با مسیرهای خودِ پنل مدیریت روی reverse proxy تداخل پیدا می‌کنند.
+var reservedServiceNames = map[string]bool{
+	"api": true, "admin": true, "static": true, "assets": true, "favicon.ico": true,
+}
 
 func dockerServicesHandler(w http.ResponseWriter, r *http.Request) {
 	state := readStateOrDefault()
@@ -4803,17 +4831,17 @@ func addDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
 	if !dockerServiceNameRe.MatchString(req.Name) {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Name must be 1-32 lowercase letters/digits/hyphens (used as a subdomain)"})
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Name must be 1-32 lowercase letters/digits/hyphens (used as a path prefix)"})
+		return
+	}
+	if reservedServiceNames[req.Name] {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is a reserved name and cannot be used for a service", req.Name)})
 		return
 	}
 	if req.Port < 1 || req.Port > 65535 {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid port (1-65535)"})
 		return
 	}
-	if req.Path == "" {
-		req.Path = "/"
-	}
-	req.PublicURL = strings.TrimSpace(req.PublicURL)
 
 	state := readStateOrDefault()
 	for _, s := range state.DockerServices {
@@ -4827,7 +4855,7 @@ func addDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
 		return
 	}
-	syncCloudflareRoutesAsync()
+	rebuildProxyRoutes()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q added", req.Name)})
 }
 
@@ -4860,7 +4888,7 @@ func deleteDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
 		return
 	}
-	syncCloudflareRoutesAsync()
+	rebuildProxyRoutes()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q removed", name)})
 }
 
@@ -4870,6 +4898,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 		"admin_token_set": getAdminToken() != "",
 		"bind_addr":       bindAddr,
 		"api_port":        apiPort,
+		"proxy_port":      proxyPort,
 	})
 }
 
@@ -5013,10 +5042,10 @@ func cloudflareSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	cfQuickURLsMu.RUnlock()
 
 	var routes []string
-	// serviceHosts نگاشت "کلید منطقی" (panel/dash/اسم هر Docker service) به هاست‌نیم
-	// عمومی واقعی است. فرانت‌اند iframe ها را از روی همین می‌سازد، نه با حدس زدن
-	// window.location.hostname + پورت محلی (که زیر تونل که هر سرویس زیردامنه‌ی
-	// جدای خودش را دارد، اصلاً درست نیست).
+	// serviceHosts نگاشت "کلید منطقی" (panel/apps/dash) به هاست‌نیم عمومی واقعی
+	// است. "apps" هاست‌نیمی است که reverse proxy محلی (و همه‌ی DockerServiceها
+	// زیر پیشوند مسیرشان) رویش سرو می‌شود. فرانت‌اند برای ساختن URL جدول
+	// Docker services از همین استفاده می‌کند، نه با حدس زدن window.location.
 	serviceHosts := map[string]string{}
 	if cfg.Mode == "api_token" && cfg.ZoneName != "" {
 		for _, r := range computeTunnelRoutes(state) {
@@ -6741,10 +6770,12 @@ func main() {
 	// override های ذخیره‌شده از صفحه‌ی Settings را قبل از هر استفاده‌ای از getSetting بارگذاری کن.
 	loadEnvOverridesCache()
 
-	// BIND_ADDR/API_PORT فقط از استارت بعدی مدیر اعمال می‌شوند (روی خود socket شنود اثر دارند)،
-	// برای همین همینجا و قبل از ساخت http.Server override احتمالی را روی متغیرهای واقعی اعمال می‌کنیم.
+	// BIND_ADDR/API_PORT/PROXY_PORT فقط از استارت بعدی مدیر اعمال می‌شوند (روی خود
+	// socketهای شنود اثر دارند)، برای همین همینجا و قبل از ساخت http.Serverها
+	// override احتمالی را روی متغیرهای واقعی اعمال می‌کنیم.
 	bindAddr = getSetting("BIND_ADDR", bindAddr)
 	apiPort = ":" + strings.TrimPrefix(getSetting("API_PORT", strings.TrimPrefix(apiPort, ":")), ":")
+	proxyPort = getSetting("PROXY_PORT", proxyPort)
 
 	// اگر قبلاً از صفحه‌ی Settings توکنی ذخیره شده باشد، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	if persisted := readStateOrDefault().AdminToken; persisted != "" {
@@ -6764,9 +6795,10 @@ func main() {
 	ensureDefaultFiles()
 	autoDownloadSingBoxIfMissing()
 	startBackupScheduler()
+	startReverseProxyServer()
 
 	if getAdminToken() == "" {
-		log.Println("⚠️  ADMIN_TOKEN تنظیم نشده — API مدیریت بدون احراز هویت است. برای امنیت آن را از صفحه‌ی Settings یا با export ADMIN_TOKEN=... ست کنید.")
+		log.Println("⚠️  ADMIN_TOKEN تنظیم نشده — API مدیریت بدون احراز هویت است. چون پنل حالا از طریق reverse proxy عمومی (پورت " + proxyPort + ") هم در دسترس است، این را قبل از فعال‌کردن هر تونلی از صفحه‌ی Settings یا با export ADMIN_TOKEN=... ست کنید.")
 	} else {
 		log.Println("🔒 API مدیریت با ADMIN_TOKEN محافظت می‌شود.")
 	}
@@ -6858,6 +6890,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(ctx)
+	if reverseProxyServer != nil {
+		_ = reverseProxyServer.Shutdown(ctx)
+	}
 
 	singBoxCmdMu.Lock()
 	stopProcess(runningSingBox)
