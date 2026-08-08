@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	mathrand "math/rand"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -99,7 +100,33 @@ func getEnvDefault(key, def string) string {
 var managedEnvKeys = []string{
 	"BIND_ADDR", "API_PORT", "PROXY_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
-	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR",
+	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR", "DEFAULT_SERVICES",
+	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT",
+	"MIMO_PROXY_PORT", "KIMI_PROXY_PORT", "DEEPSEEK_PROXY_PORT", "ZAI_PROXY_PORT", "GROK2API_PROXY_PORT",
+}
+
+var managedEnvDefaults = map[string]string{
+	"BIND_ADDR":                "127.0.0.1",
+	"API_PORT":                 "5000",
+	"PROXY_PORT":               "80",
+	"SINGBOX_VERSION":          "v1.13.16",
+	"SINGBOX_INSTALL_DIR":      "bin",
+	"SINGBOX_NO_AUTO_DOWNLOAD": "0",
+	"CLOUDFLARED_INSTALL_DIR":  "bin",
+	"CLASH_API_PORT":           "9090",
+	"MIXED_PORT":               "7890",
+	"OMNIROUTE_PORT":           "20128",
+	"MIMO_PORT":                "3003",
+	"KIMI_PORT":                "3002",
+	"DEEPSEEK_PORT":            "3005",
+	"ZAI_PORT":                 "3001",
+	"GROK2API_PORT":            "3004",
+	"FLARESOLVERR_PORT":        "8191",
+	"MIMO_PROXY_PORT":          "2003",
+	"KIMI_PROXY_PORT":          "2002",
+	"DEEPSEEK_PROXY_PORT":      "2005",
+	"ZAI_PROXY_PORT":           "2001",
+	"GROK2API_PROXY_PORT":      "2004",
 }
 
 // backupEnvKeys کلیدهای پیکربندی بکاپ/بازیابی هستند. عمداً از همان مکانیزم
@@ -583,6 +610,9 @@ const htmlContent = `<!DOCTYPE html>
 
   <main id="main">
     <div id="mainContent">
+      <div id="clashSecretWarning" style="display:none; background-color: var(--warning); color: #fff; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 20px; font-weight: 500;">
+        ⚠️ هشدار: رمز عبور Clash API (CLASH_SECRET) تعیین نشده است. لطفاً برای امنیت بیشتر از <a href="#settings" onclick="showPage('settings'); return false;" style="color: #fff; text-decoration: underline;">صفحه تنظیمات</a> یک رمز تعیین کنید.
+      </div>
 
       <!-- ============ SERVICES ============ -->
       <section class="page active" id="page-services">
@@ -611,8 +641,12 @@ const htmlContent = `<!DOCTYPE html>
               <input type="text" id="svcName" placeholder="e.g. telegram">
             </div>
             <div class="field">
-              <label for="svcPort">Listen port</label>
-              <input type="number" id="svcPort" placeholder="2083" min="1" max="65535">
+              <label for="svcListenPort">Listen port (Web) <span class="hint">(required)</span></label>
+              <input type="number" id="svcListenPort" placeholder="3000" min="1" max="65535">
+            </div>
+            <div class="field">
+              <label for="svcProxyPort">Proxy port <span class="hint">(optional)</span></label>
+              <input type="number" id="svcProxyPort" placeholder="2000" min="1" max="65535">
             </div>
             <button class="btn btn-primary" onclick="addService()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -627,7 +661,7 @@ const htmlContent = `<!DOCTYPE html>
             <p class="sub" style="margin:0;">Live outbound changes take effect immediately via the Clash API, without restarting sing-box.</p>
           </div>
           <table class="data">
-            <thead><tr><th>Service</th><th>Inbound</th><th>Port</th><th>Outbound selector</th><th>Live outbound</th><th></th></tr></thead>
+            <thead><tr><th>Service</th><th>Listen Port</th><th>Proxy Port</th><th>Public URL</th><th>Live Outbound</th><th></th></tr></thead>
             <tbody id="servicesBody"><tr class="empty-row"><td colspan="6">Loading...</td></tr></tbody>
           </table>
         </div>
@@ -661,6 +695,93 @@ const htmlContent = `<!DOCTYPE html>
             <button class="btn btn-primary" onclick="addWarp()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
               Create group
+            </button>
+          </div>
+        </div>
+        
+        <div class="panel">
+          <h2>Global WARP Endpoint</h2>
+          <p class="sub">This endpoint (IP:Port) is applied to ALL WARP nodes. Choose a saved working endpoint or scan for new ones in real time.</p>
+          
+          <div class="row" style="align-items:flex-end; margin-bottom:15px;">
+            <div class="field" style="flex:2;">
+              <label>Current Global Endpoint</label>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <div id="globalWarpEndpoint" style="font-family: var(--font-mono); font-size: 14px; background: var(--bg-alt); padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--border); color: var(--text); flex:1;">Loading...</div>
+                <button class="btn btn-ghost btn-sm" onclick="quickTestCurrentEndpoint()" id="btnQuickTest" title="Test latency of current endpoint">
+                  ⚡ Quick Test (تست سریع)
+                </button>
+                <span id="quickTestResult" style="font-weight:bold; font-size:13px;"></span>
+              </div>
+            </div>
+            <button class="btn btn-danger" onclick="resetWarpEndpoint()">
+              Reset Default
+            </button>
+          </div>
+
+          <div class="row" style="align-items:flex-end; margin-bottom:15px; border-top: 1px solid var(--border); padding-top: 15px;">
+            <div class="field" style="flex:2;">
+              <label for="savedWarpDropdown">Saved Working Endpoints (تغییر سریع بدون اسکن مجدد)</label>
+              <select id="savedWarpDropdown" class="input" style="font-family: var(--font-mono);"></select>
+            </div>
+            <button class="btn btn-primary" onclick="applyDropdownWarpEndpoint()">
+              Apply Selected Saved
+            </button>
+          </div>
+
+          <div class="row" style="align-items:flex-end; border-top: 1px solid var(--border); padding-top: 15px;">
+            <div class="field">
+              <label for="warpIpType">IP Protocol</label>
+              <select id="warpIpType" class="input">
+                <option value="both" selected>Both (IPv4 &amp; IPv6)</option>
+                <option value="ipv4">IPv4 Only</option>
+                <option value="ipv6">IPv6 Only</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="warpPauseTarget">Auto-Pause Target</label>
+              <input type="number" id="warpPauseTarget" class="input" value="10" min="1" placeholder="e.g. 10">
+            </div>
+            <button class="btn btn-primary" onclick="startWarpScan()" id="startScanBtn">
+              Start WARP Scan
+            </button>
+          </div>
+
+          <div id="warpScanResultsContainer" style="display:none; margin-top:20px; border-top: 1px solid var(--border); padding-top: 15px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; background:var(--bg-alt); padding:10px 14px; border-radius:var(--radius); border:1px solid var(--border);">
+              <div>
+                <div style="font-weight:600; font-size:14px;"><span id="scanStatusTitle">Scanning in progress...</span> (<span id="scanValidCount" style="color:var(--success);">0</span> working / <span id="scanRejectedCount" style="color:var(--danger);">0</span> rejected / <span id="scanTestedCount">0</span> tested)</div>
+                <div class="hint" id="scanStatusSub" style="margin-top:2px;">Searching candidate pool...</div>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <button class="btn btn-primary btn-sm" id="btnResumeScan" style="display:none;" onclick="resumeWarpScan()">
+                  Continue Scan (ادامه)
+                </button>
+                <button class="btn btn-ghost btn-sm" id="btnStopScan" onclick="stopWarpScan()">
+                  Pause/Stop
+                </button>
+                <button class="btn btn-primary btn-sm" onclick="applySelectedWarpEndpoint()">
+                  Apply Selected
+                </button>
+              </div>
+            </div>
+
+            <div style="max-height: 350px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 15px;">
+              <table class="data" style="margin:0;">
+                <thead>
+                  <tr>
+                    <th style="width:50px; text-align:center;">Select</th>
+                    <th>Endpoint Address</th>
+                    <th>Ping (Latency)</th>
+                    <th>Status / Source</th>
+                  </tr>
+                </thead>
+                <tbody id="warpScanResultsBody"></tbody>
+              </table>
+            </div>
+
+            <button class="btn btn-primary" onclick="applySelectedWarpEndpoint()">
+              Apply Selected Endpoint
             </button>
           </div>
         </div>
@@ -745,7 +866,7 @@ const htmlContent = `<!DOCTYPE html>
           <div id="singboxInfo" class="row" style="margin-bottom:14px;"></div>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
-              <label for="singboxVersion">Version to install</label>
+              <label for="singboxVersion">Version to install (one-off)</label>
               <input type="text" id="singboxVersion" placeholder="v1.13.16" value="v1.13.16">
             </div>
             <button class="btn btn-primary" id="singboxDownloadBtn" onclick="downloadSingboxVersion()">
@@ -757,6 +878,35 @@ const htmlContent = `<!DOCTYPE html>
             <button class="btn btn-ghost btn-sm" onclick="controlSingbox('start')">Start</button>
             <button class="btn btn-ghost btn-sm" onclick="controlSingbox('restart')">Restart</button>
             <button class="btn btn-danger btn-sm" onclick="controlSingbox('stop')">Stop</button>
+          </div>
+          
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border);">
+          <h3 style="margin-bottom: 12px; font-size: 14px;">sing-box Configuration</h3>
+          <div class="row" style="margin-bottom:14px;">
+            <div class="field" style="flex:1;">
+              <label for="env_SINGBOX_PATH">sing-box binary path override</label>
+              <input type="text" id="env_SINGBOX_PATH" placeholder="(optional / not set)">
+            </div>
+            <div class="field" style="flex:1;">
+              <label for="env_SINGBOX_VERSION">sing-box default version</label>
+              <input type="text" id="env_SINGBOX_VERSION" placeholder="(default: v1.13.16)">
+            </div>
+          </div>
+          <div class="row" style="margin-bottom:14px; align-items: flex-end;">
+            <div class="field" style="flex:1;">
+              <label for="env_SINGBOX_INSTALL_DIR">sing-box install directory</label>
+              <input type="text" id="env_SINGBOX_INSTALL_DIR" placeholder="(default: bin)">
+            </div>
+            <div class="field" style="flex:1;">
+              <label style="display:flex; align-items:center; cursor:pointer;">
+                <input type="checkbox" id="env_SINGBOX_NO_AUTO_DOWNLOAD_checkbox" onchange="document.getElementById('env_SINGBOX_NO_AUTO_DOWNLOAD').value = this.checked ? '1' : '0'" style="width:auto; margin-right:8px; margin-bottom:0;">
+                Disable sing-box auto-download
+              </label>
+              <input type="hidden" id="env_SINGBOX_NO_AUTO_DOWNLOAD" value="0">
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary btn-sm" onclick="saveSingboxEnvSettings()">Save Configuration</button>
           </div>
         </div>
 
@@ -810,6 +960,22 @@ const htmlContent = `<!DOCTYPE html>
             <button class="btn btn-danger btn-sm" onclick="controlCloudflare('stop')">Stop</button>
           </div>
           <div id="cfRoutes" style="margin-top:14px;"></div>
+
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border);">
+          <h3 style="margin-bottom: 12px; font-size: 14px;">cloudflared Configuration</h3>
+          <div class="row" style="margin-bottom:14px;">
+            <div class="field" style="flex:1;">
+              <label for="env_CLOUDFLARED_PATH">cloudflared binary path override</label>
+              <input type="text" id="env_CLOUDFLARED_PATH" placeholder="(optional / not set)">
+            </div>
+            <div class="field" style="flex:1;">
+              <label for="env_CLOUDFLARED_INSTALL_DIR">cloudflared install directory</label>
+              <input type="text" id="env_CLOUDFLARED_INSTALL_DIR" placeholder="(default: bin)">
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary btn-sm" onclick="saveCloudflaredEnvSettings()">Save Configuration</button>
+          </div>
         </div>
 
         <div class="panel">
@@ -846,26 +1012,6 @@ const htmlContent = `<!DOCTYPE html>
         </div>
 
         <div class="panel">
-          <div class="panel-head"><h2>Docker web apps</h2></div>
-          <p class="sub">Each entry is reachable at <span class="mono">&lt;this panel's public URL&gt;/&lt;name&gt;/...</span> through the built-in reverse proxy — no per-service tunnel setup, no manual ingress, works the same in every Cloudflare mode (Full API Token, Tunnel Token, or Quick Tunnel).</p>
-          <div class="row" style="align-items:flex-end;">
-            <div class="field">
-              <label for="dsName">Name <span class="hint">(used as the URL path prefix, lowercase)</span></label>
-              <input type="text" id="dsName" placeholder="e.g. xai">
-            </div>
-            <div class="field">
-              <label for="dsPort">Local port</label>
-              <input type="number" id="dsPort" placeholder="3000" min="1" max="65535">
-            </div>
-            <button class="btn btn-primary" onclick="addDockerService()">Add</button>
-          </div>
-          <table class="data" style="margin-top:14px;">
-            <thead><tr><th>Name</th><th>Local port</th><th>Public URL</th><th></th></tr></thead>
-            <tbody id="dockerServicesBody"><tr class="empty-row"><td colspan="4">No Docker web apps added yet.</td></tr></tbody>
-          </table>
-        </div>
-
-        <div class="panel">
           <div class="panel-head"><h2>Backup &amp; Restore</h2></div>
           <p class="sub">/data and /app/data are always included. Restore is checked automatically on container startup if those two are empty and a previous backup exists. <span class="hint">Everything here is also settable via the matching BACKUP_* environment variable at container start — useful for bootstrapping before any restore has happened.</span></p>
 
@@ -882,14 +1028,14 @@ const htmlContent = `<!DOCTYPE html>
 
           <h3 style="margin:14px 0 6px;font-size:14px;">Schedule</h3>
           <div class="row" style="align-items:flex-end;">
-            <div class="field"><label><input type="checkbox" id="bkHourlyEnabled"> Hourly</label><input type="number" id="bkHourlyKeep" placeholder="keep (24)" min="1"></div>
-            <div class="field"><label><input type="checkbox" id="bkDailyEnabled"> Daily</label><input type="number" id="bkDailyKeep" placeholder="keep (7)" min="1"></div>
-            <div class="field"><label><input type="checkbox" id="bkMonthlyEnabled"> Monthly</label><input type="number" id="bkMonthlyKeep" placeholder="keep (6)" min="1"></div>
+            <div class="field"><label><input type="checkbox" id="bkHourlyEnabled" onchange="toggleBackupVisibility()"> Hourly</label><input type="number" id="bkHourlyKeep" placeholder="keep (24)" min="1"></div>
+            <div class="field"><label><input type="checkbox" id="bkDailyEnabled" onchange="toggleBackupVisibility()"> Daily</label><input type="number" id="bkDailyKeep" placeholder="keep (7)" min="1"></div>
+            <div class="field"><label><input type="checkbox" id="bkMonthlyEnabled" onchange="toggleBackupVisibility()"> Monthly</label><input type="number" id="bkMonthlyKeep" placeholder="keep (6)" min="1"></div>
           </div>
 
           <h3 style="margin:14px 0 6px;font-size:14px;">S3-compatible</h3>
           <div class="row" style="align-items:flex-end;">
-            <div class="field"><label><input type="checkbox" id="bkS3Enabled"> Enabled</label></div>
+            <div class="field"><label><input type="checkbox" id="bkS3Enabled" onchange="toggleBackupVisibility()"> Enabled</label></div>
             <div class="field"><label for="bkS3Endpoint">Endpoint</label><input type="text" id="bkS3Endpoint" placeholder="s3.amazonaws.com"></div>
             <div class="field"><label for="bkS3Region">Region</label><input type="text" id="bkS3Region" placeholder="us-east-1"></div>
             <div class="field"><label for="bkS3Bucket">Bucket</label><input type="text" id="bkS3Bucket"></div>
@@ -902,11 +1048,11 @@ const htmlContent = `<!DOCTYPE html>
           </div>
 
           <h3 style="margin:14px 0 6px;font-size:14px;">Cloudflare R2</h3>
-          <p class="sub"><span class="hint">Reuses the Cloudflare API Token from the Tunnel section to create the bucket, but R2 object access needs its own S3 API credentials — generate those separately under R2 → Manage API tokens and paste them below.</span></p>
+          <p class="sub" id="bkR2HelpText"><span class="hint">Reuses the Cloudflare API Token from the Tunnel section to create the bucket, but R2 object access needs its own S3 API credentials — generate those separately under R2 → Manage API tokens and paste them below.</span></p>
           <div class="row" style="align-items:flex-end;">
-            <div class="field"><label><input type="checkbox" id="bkR2Enabled"> Enabled</label></div>
+            <div class="field"><label><input type="checkbox" id="bkR2Enabled" onchange="toggleBackupVisibility()"> Enabled</label></div>
             <div class="field"><label for="bkR2Bucket">Bucket</label><input type="text" id="bkR2Bucket"></div>
-            <button class="btn btn-ghost btn-sm" onclick="createR2Bucket()">Create bucket in Cloudflare</button>
+            <button class="btn btn-ghost btn-sm" id="btnCreateR2" onclick="createR2Bucket()">Create bucket in Cloudflare</button>
           </div>
           <div class="row" style="align-items:flex-end;margin-top:8px;">
             <div class="field"><label for="bkR2AccessKey">R2 access key</label><input type="text" id="bkR2AccessKey" autocomplete="off"></div>
@@ -916,11 +1062,11 @@ const htmlContent = `<!DOCTYPE html>
 
           <h3 style="margin:14px 0 6px;font-size:14px;">Telegram bot</h3>
           <div class="row" style="align-items:flex-end;">
-            <div class="field"><label><input type="checkbox" id="bkTgEnabled"> Enabled</label></div>
+            <div class="field"><label><input type="checkbox" id="bkTgEnabled" onchange="toggleBackupVisibility()"> Enabled</label></div>
             <div class="field"><label for="bkTgBotToken">Bot token</label><input type="password" id="bkTgBotToken" placeholder="Leave empty to keep the current token" autocomplete="new-password"></div>
             <div class="field"><label for="bkTgChatId">Chat ID</label><input type="text" id="bkTgChatId" placeholder="e.g. -1001234567890"></div>
           </div>
-          <p class="sub"><span class="hint">Archives over ~18MB are automatically split into numbered parts (Telegram's bot download cap is 20MB) and reassembled on restore.</span></p>
+          <p class="sub" id="bkTgHelpText"><span class="hint">Archives over ~18MB are automatically split into numbered parts (Telegram's bot download cap is 20MB) and reassembled on restore.</span></p>
 
           <div class="row" style="margin-top:14px;">
             <button class="btn btn-primary" onclick="saveBackupSettings()">Save settings</button>
@@ -1062,6 +1208,13 @@ const htmlContent = `<!DOCTYPE html>
   function enterApp(){
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('mainContent').classList.add('show');
+    var hash = window.location.hash.substring(1);
+    var validPages = ['services', 'warp', 'dashboard', 'raw', 'settings'];
+    if (validPages.indexOf(hash) !== -1) {
+      showPage(hash);
+    } else {
+      showPage('services');
+    }
     loadAllData();
     setInterval(loadSelectors, 12000);
     setInterval(loadStatus, 8000);
@@ -1115,8 +1268,11 @@ const htmlContent = `<!DOCTYPE html>
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
     if (name === 'raw') ensureRawEditors();
-    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadSubscriptions(); loadEnvSettings(); loadBackupSettings(); }
+    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadSubscriptions(); loadEnvSettings(); loadBackupSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
+    if (window.location.hash !== '#' + name) {
+      history.replaceState(null, null, '#' + name);
+    }
   };
   window.toggleSidebar = function(){
     document.getElementById('sidebar').classList.toggle('open');
@@ -1227,7 +1383,7 @@ const htmlContent = `<!DOCTYPE html>
   function renderStats(tmpl, nodesArr, warpData){
     var row = document.getElementById('statsRow');
     row.innerHTML = '';
-    var services = (tmpl.inbounds || []).filter(function(i){ return i.tag && i.tag.indexOf('in-') === 0; }).length;
+    var services = (typeof lastServices !== 'undefined') ? lastServices.length : 0;
     var groups = (warpData && warpData.groups) ? warpData.groups.length : 0;
     var endpoints = nodesArr.length;
     var defGroup = (warpData && warpData.default_group) ? warpData.default_group : 'none';
@@ -1310,7 +1466,6 @@ const htmlContent = `<!DOCTYPE html>
   window.loadAllData = function(){
     loadStatus();
     loadConfigsAndDerived();
-    loadSelectors();
   };
 
   async function loadConfigsAndDerived(){
@@ -1329,39 +1484,69 @@ const htmlContent = `<!DOCTYPE html>
       }
       try { lastTemplate = JSON.parse(data.template || '{}'); } catch(e){ lastTemplate = {}; }
       try { lastNodes = JSON.parse(data.nodes || '[]'); } catch(e){ lastNodes = []; }
-      renderServices(lastTemplate);
+      
+      var secretWarning = document.getElementById('clashSecretWarning');
+      if (secretWarning) {
+        var hasSecret = false;
+        try {
+          if (lastTemplate.experimental && lastTemplate.experimental.clash_api && lastTemplate.experimental.clash_api.secret) {
+            hasSecret = true;
+          }
+        } catch (e) {}
+        secretWarning.style.display = hasSecret ? 'none' : 'block';
+      }
+
+      lastServices = data.services || [];
+      renderServices(lastServices);
       await loadWarpGroups();
+      await loadWarpEndpoint();
       loadSelectors();
     } catch (err){
       showMessage('Failed to load configuration: ' + err.message, 'danger');
     }
   }
 
-  function renderServices(tmpl){
+  var lastServices = [];
+
+  async function renderServices(services){
     var body = document.getElementById('servicesBody');
-    var inbounds = (tmpl.inbounds || []).filter(function(i){ return i.tag && i.tag.indexOf('in-') === 0; });
-    document.getElementById('countServices').textContent = inbounds.length;
-    if (inbounds.length === 0){
+    document.getElementById('countServices').textContent = services.length;
+    if (services.length === 0){
       body.innerHTML = '<tr class="empty-row"><td colspan="6">No services yet — add one above.</td></tr>';
       return;
     }
+    var base = await resolvePublicBaseUrl();
     body.innerHTML = '';
-    inbounds.forEach(function(inb){
-      var name = inb.tag.substring(3);
-      var port = inb.listen_port;
+    services.forEach(function(svc){
+      var name = svc.name;
+      var listenPort = svc.listen_port;
+      var proxyPort = svc.proxy_port || '-';
       var tr = document.createElement('tr');
       tr.dataset.service = name;
 
       var tdName = document.createElement('td'); tdName.textContent = name;
-      var tdTag = document.createElement('td'); tdTag.className = 'mono'; tdTag.textContent = inb.tag;
-      var tdPort = document.createElement('td'); tdPort.className = 'mono'; tdPort.textContent = port;
-      var tdSel = document.createElement('td'); tdSel.className = 'mono'; tdSel.textContent = 'select-' + name;
+      var tdListen = document.createElement('td'); tdListen.className = 'mono'; tdListen.textContent = listenPort;
+      var tdProxy = document.createElement('td'); tdProxy.className = 'mono'; tdProxy.textContent = proxyPort;
+      
+      var url = base + '/' + name + '/';
+      var tdUrl = document.createElement('td'); tdUrl.className = 'mono';
+      if (listenPort > 0) {
+        var link = document.createElement('a');
+        link.href = url; link.textContent = '/' + name + '/'; link.target = '_blank'; link.rel = 'noreferrer';
+        tdUrl.appendChild(link);
+      } else {
+        tdUrl.textContent = '-';
+      }
 
-      // Populated/refreshed by loadSelectors() once the Clash API is reachable.
+      // Live outbound only makes sense if there's a proxy port
       var tdLive = document.createElement('td');
-      tdLive.className = 'live-outbound';
-      tdLive.dataset.service = name;
-      tdLive.innerHTML = '<span class="hint">' + (controllerBase ? 'loading…' : 'connect to switch live') + '</span>';
+      if (svc.proxy_port > 0) {
+        tdLive.className = 'live-outbound';
+        tdLive.dataset.service = name;
+        tdLive.innerHTML = '<span class="hint">' + (controllerBase ? 'loading…' : 'connect to switch live') + '</span>';
+      } else {
+        tdLive.textContent = '-';
+      }
 
       var tdAct = document.createElement('td');
       tdAct.style.whiteSpace = 'nowrap';
@@ -1369,30 +1554,33 @@ const htmlContent = `<!DOCTYPE html>
       var editBtn = document.createElement('button');
       editBtn.className = 'btn btn-ghost btn-sm';
       editBtn.textContent = 'Edit';
-      editBtn.onclick = function(){ startEditService(tr, name, port); };
+      editBtn.onclick = function(){ startEditService(tr, name, listenPort, svc.proxy_port || 0); };
 
       var delBtn = document.createElement('button');
       delBtn.className = 'btn btn-danger btn-sm';
       delBtn.textContent = 'Delete';
       delBtn.style.marginInlineStart = '6px';
       delBtn.onclick = function(){
-        askConfirm('Delete service', 'This removes the "' + name + '" inbound, its selector, and its routing rule.', function(){
+        askConfirm('Delete service', 'This removes "' + name + '" and its routing rules/public URL.', function(){
           request('/api/delete_service', { name: name }, 'Service deleted');
         });
       };
       tdAct.appendChild(editBtn);
       tdAct.appendChild(delBtn);
 
-      tr.appendChild(tdName); tr.appendChild(tdTag); tr.appendChild(tdPort); tr.appendChild(tdSel); tr.appendChild(tdLive); tr.appendChild(tdAct);
+      tr.appendChild(tdName); tr.appendChild(tdListen); tr.appendChild(tdProxy); tr.appendChild(tdUrl); tr.appendChild(tdLive); tr.appendChild(tdAct);
       body.appendChild(tr);
     });
+    // Trigger loadSelectors again since the DOM for .live-outbound changed
+    if (controllerBase) loadSelectors();
   }
 
   // Swaps the Name/Port cells for inputs and the action buttons for Save/Cancel,
   // without disturbing the rest of the table.
-  function startEditService(tr, name, port){
+  function startEditService(tr, name, listenPort, proxyPort){
     var tdName = tr.children[0];
-    var tdPort = tr.children[2];
+    var tdListen = tr.children[1];
+    var tdProxy = tr.children[2];
     var tdAct = tr.children[5];
 
     tdName.innerHTML = '';
@@ -1400,15 +1588,26 @@ const htmlContent = `<!DOCTYPE html>
     nameInput.type = 'text';
     nameInput.value = name;
     nameInput.maxLength = 32;
+    nameInput.style.width = '100px';
     tdName.appendChild(nameInput);
 
-    tdPort.innerHTML = '';
-    var portInput = document.createElement('input');
-    portInput.type = 'number';
-    portInput.value = port;
-    portInput.min = 1;
-    portInput.max = 65535;
-    tdPort.appendChild(portInput);
+    tdListen.innerHTML = '';
+    var listenInput = document.createElement('input');
+    listenInput.type = 'number';
+    listenInput.value = listenPort;
+    listenInput.min = 1;
+    listenInput.max = 65535;
+    listenInput.style.width = '80px';
+    tdListen.appendChild(listenInput);
+
+    tdProxy.innerHTML = '';
+    var proxyInput = document.createElement('input');
+    proxyInput.type = 'number';
+    proxyInput.value = proxyPort > 0 ? proxyPort : '';
+    proxyInput.min = 1;
+    proxyInput.max = 65535;
+    proxyInput.style.width = '80px';
+    tdProxy.appendChild(proxyInput);
 
     tdAct.innerHTML = '';
     var saveBtn = document.createElement('button');
@@ -1416,11 +1615,20 @@ const htmlContent = `<!DOCTYPE html>
     saveBtn.textContent = 'Save';
     saveBtn.onclick = function(){
       var newName = nameInput.value.trim();
-      var newPort = parseInt(portInput.value, 10);
+      var newListen = parseInt(listenInput.value, 10);
+      var newProxy = parseInt(proxyInput.value, 10);
+      if (isNaN(newProxy)) newProxy = 0;
+
       if (!newName){ showMessage('Service name is required', 'danger'); return; }
-      if (isNaN(newPort) || newPort < 1 || newPort > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
+      if (isNaN(newListen) || newListen < 1 || newListen > 65535){ showMessage('A valid listen port is required', 'danger'); return; }
+      
       saveBtn.disabled = true;
-      request('/api/edit_service', { old_name: name, new_name: newName, new_port: newPort }, 'Service updated').then(function(ok){
+      request('/api/edit_service', { 
+        old_name: name, 
+        new_name: newName, 
+        new_listen_port: newListen,
+        new_proxy_port: newProxy
+      }, 'Service updated').then(function(ok){
         if (!ok) saveBtn.disabled = false;
       });
     };
@@ -1429,7 +1637,7 @@ const htmlContent = `<!DOCTYPE html>
     cancelBtn.className = 'btn btn-ghost btn-sm';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.style.marginInlineStart = '6px';
-    cancelBtn.onclick = function(){ renderServices(lastTemplate); loadSelectors(); };
+    cancelBtn.onclick = function(){ renderServices(lastServices); };
 
     tdAct.appendChild(saveBtn);
     tdAct.appendChild(cancelBtn);
@@ -1440,13 +1648,22 @@ const htmlContent = `<!DOCTYPE html>
 
   window.addService = function(){
     var name = document.getElementById('svcName').value.trim();
-    var port = parseInt(document.getElementById('svcPort').value, 10);
+    var listenPort = parseInt(document.getElementById('svcListenPort').value, 10);
+    var proxyPort = parseInt(document.getElementById('svcProxyPort').value, 10);
+    if (isNaN(proxyPort)) proxyPort = 0;
+
     if (!name){ showMessage('Service name is required', 'danger'); return; }
-    if (isNaN(port) || port < 1 || port > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
-    request('/api/add_service', { name: name, port: port }, 'Service added').then(function(ok){
+    if (isNaN(listenPort) || listenPort < 1 || listenPort > 65535){ showMessage('A valid listen port is required', 'danger'); return; }
+    
+    request('/api/add_service', { 
+      name: name, 
+      listen_port: listenPort,
+      proxy_port: proxyPort 
+    }, 'Service added').then(function(ok){
       if (ok){
         document.getElementById('svcName').value = '';
-        document.getElementById('svcPort').value = '';
+        document.getElementById('svcListenPort').value = '';
+        document.getElementById('svcProxyPort').value = '';
       }
     });
   };
@@ -1606,6 +1823,323 @@ const htmlContent = `<!DOCTYPE html>
     });
   };
 
+  async function loadWarpEndpoint() {
+    try {
+      var res = await fetch('/api/warp/endpoint');
+      var data = await res.json();
+      var el = document.getElementById('globalWarpEndpoint');
+      if (el) el.textContent = data.endpoint || 'Not set';
+      loadWarpBackupsDropdown();
+    } catch (e) {
+      console.error('Failed to load warp endpoint:', e);
+    }
+  }
+
+  var knownWarpDelays = {};
+
+  async function loadWarpBackupsDropdown(){
+    try {
+      var res = await fetch('/api/warp/endpoint/backups');
+      var data = await res.json();
+      var dropdown = document.getElementById('savedWarpDropdown');
+      if (!dropdown) return;
+      dropdown.innerHTML = '';
+      var list = data.backups || [];
+      var cur = data.current || '';
+
+      list.forEach(function(ep){
+        var opt = document.createElement('option');
+        opt.value = ep;
+        opt.textContent = ep + (knownWarpDelays[ep] ? ' - ' + knownWarpDelays[ep] + 'ms' : '') + (ep === cur ? ' (Current Active)' : (ep === 'engage.cloudflareclient.com:2408' ? ' (Default)' : ''));
+        if (ep === cur) opt.selected = true;
+        dropdown.appendChild(opt);
+      });
+      
+      // Background fetch delays if not known
+      var missing = list.filter(function(ep) { return !knownWarpDelays[ep]; });
+      if (missing.length > 0 && typeof isScanning !== 'undefined' && !isScanning) {
+        api('/api/warp/endpoint/test_backups', {}).then(function(testData) {
+          var updated = false;
+          (testData.results || []).forEach(function(resItem) {
+            if (resItem.delay > 0) {
+              knownWarpDelays[resItem.endpoint] = resItem.delay;
+              updated = true;
+            }
+          });
+          if (updated) {
+            // Re-render dropdown with new delays
+            Array.from(dropdown.options).forEach(function(opt) {
+              var ep = opt.value;
+              if (knownWarpDelays[ep]) {
+                opt.textContent = ep + ' - ' + knownWarpDelays[ep] + 'ms' + (ep === cur ? ' (Current Active)' : (ep === 'engage.cloudflareclient.com:2408' ? ' (Default)' : ''));
+              }
+            });
+          }
+        }).catch(function(){}); // Ignore errors in background ping
+      }
+    } catch(e) {
+      console.error('Failed to load warp backups:', e);
+    }
+  }
+
+  window.quickTestCurrentEndpoint = function(){
+    var btn = document.getElementById('btnQuickTest');
+    var resultEl = document.getElementById('quickTestResult');
+    if (btn) btn.disabled = true;
+    if (resultEl) resultEl.innerHTML = '<span class="hint">Testing...</span>';
+
+    api('/api/warp/endpoint/ping_current', {}).then(function(data){
+      if (btn) btn.disabled = false;
+      if (data.delay > 0) {
+        if (data.endpoint) knownWarpDelays[data.endpoint] = data.delay; // Cache for dropdown
+        var color = data.delay < 250 ? 'var(--success)' : (data.delay < 450 ? 'orange' : 'var(--danger)');
+        if (resultEl) resultEl.innerHTML = '<span style="color:' + color + ';">⚡ ' + data.delay + ' ms</span>';
+        if (typeof loadWarpBackupsDropdown === 'function') loadWarpBackupsDropdown();
+      } else {
+        if (resultEl) resultEl.innerHTML = '<span style="color:var(--text-dim);">Timeout / Failed</span>';
+      }
+    }).catch(function(err){
+      if (btn) btn.disabled = false;
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--danger);">' + err.message + '</span>';
+    });
+  };
+
+  window.applyDropdownWarpEndpoint = function(){
+    var dropdown = document.getElementById('savedWarpDropdown');
+    if (!dropdown || !dropdown.value) {
+      showMessage('No saved endpoint selected', 'danger');
+      return;
+    }
+    var ep = dropdown.value;
+    api('/api/warp/endpoint/apply', { endpoint: ep }).then(function(data){
+      showMessage(data.message, 'success');
+      loadWarpEndpoint();
+      loadWarpGroups();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  var isScanning = false;
+  var isPaused = false;
+  var validScanResults = [];
+  var testedEndpointMap = {};
+  var totalTestedCount = 0;
+  var totalRejectedCount = 0;
+  var targetPauseThreshold = 10;
+  var selectedIpType = 'both';
+  var scanSessionId = 0;
+
+  window.startWarpScan = function(){
+    isScanning = true;
+    isPaused = false;
+    validScanResults = [];
+    testedEndpointMap = {};
+    totalTestedCount = 0;
+    totalRejectedCount = 0;
+    scanSessionId++;
+    var currentSession = scanSessionId;
+    
+    var pauseSelect = document.getElementById('warpPauseTarget');
+    targetPauseThreshold = pauseSelect ? parseInt(pauseSelect.value, 10) : 10;
+    if (isNaN(targetPauseThreshold) || targetPauseThreshold < 1) targetPauseThreshold = 10;
+
+    var ipTypeSelect = document.getElementById('warpIpType');
+    selectedIpType = ipTypeSelect ? ipTypeSelect.value : 'both';
+
+    var container = document.getElementById('warpScanResultsContainer');
+    if (container) container.style.display = 'block';
+
+    var btn = document.getElementById('startScanBtn');
+    if (btn) btn.disabled = true;
+
+    updateScanUIStatus('Scanning in progress...', 'scanning');
+    runScanLoop(currentSession);
+  };
+
+  window.resumeWarpScan = function(){
+    if (!isScanning && validScanResults.length === 0) return;
+    isScanning = true;
+    isPaused = false;
+
+    var pauseSelect = document.getElementById('warpPauseTarget');
+    var increment = pauseSelect ? parseInt(pauseSelect.value, 10) : 10;
+    if (isNaN(increment) || increment < 1) increment = 10;
+    targetPauseThreshold = validScanResults.length + increment;
+
+    updateScanUIStatus('Resuming scan...', 'scanning');
+    scanSessionId++;
+    runScanLoop(scanSessionId);
+  };
+
+  window.stopWarpScan = function(){
+    isScanning = false;
+    isPaused = false;
+    updateScanUIStatus('Scan paused/stopped', 'stopped');
+    var btn = document.getElementById('startScanBtn');
+    if (btn) btn.disabled = false;
+  };
+
+  function updateScanUIStatus(subText, state){
+    var validCountEl = document.getElementById('scanValidCount');
+    var rejectedCountEl = document.getElementById('scanRejectedCount');
+    var testedCountEl = document.getElementById('scanTestedCount');
+    var subEl = document.getElementById('scanStatusSub');
+    var btnResume = document.getElementById('btnResumeScan');
+    var btnStop = document.getElementById('btnStopScan');
+
+    if (validCountEl) validCountEl.textContent = validScanResults.length;
+    if (rejectedCountEl) rejectedCountEl.textContent = totalRejectedCount;
+    if (testedCountEl) testedCountEl.textContent = totalTestedCount;
+    if (subEl) subEl.textContent = subText;
+
+    if (state === 'scanning') {
+      if (btnResume) btnResume.style.display = 'none';
+      if (btnStop) btnStop.style.display = 'inline-block';
+    } else if (state === 'paused') {
+      if (btnResume) btnResume.style.display = 'inline-block';
+      if (btnStop) btnStop.style.display = 'inline-block';
+    } else {
+      if (btnResume) btnResume.style.display = 'inline-block';
+      if (btnStop) btnStop.style.display = 'none';
+    }
+  }
+
+  async function runScanLoop(sessionId){
+    while (isScanning && !isPaused && scanSessionId === sessionId) {
+      var excludedList = Object.keys(testedEndpointMap);
+      try {
+        var res = await api('/api/warp/endpoint/scan_batch', { batch_size: 25, excluded: excludedList, ip_type: selectedIpType });
+        if (scanSessionId !== sessionId) break; // Check again after await
+        
+        var batchTested = res.tested_count || 0;
+        totalTestedCount += batchTested;
+
+        var newValid = res.valid_results || [];
+        var newValidCount = 0;
+        
+        newValid.forEach(function(item){
+          if (!testedEndpointMap[item.endpoint]) {
+            testedEndpointMap[item.endpoint] = true;
+            if (item.delay > 0) { // STRICT FILTER: ONLY VALID PING (>0 ms)
+              validScanResults.push(item);
+              knownWarpDelays[item.endpoint] = item.delay; // Cache
+              newValidCount++;
+            }
+          }
+        });
+        
+        totalRejectedCount += (batchTested - newValidCount);
+
+        // Re-sort valid results by delay ascending
+        validScanResults.sort(function(a, b){ return a.delay - b.delay; });
+        renderValidScanTable(validScanResults);
+        loadWarpBackupsDropdown();
+
+        // Check if we hit pause threshold
+        if (validScanResults.length >= targetPauseThreshold) {
+          isPaused = true;
+          updateScanUIStatus('Paused (Found ' + validScanResults.length + ' working endpoints). Pick an endpoint or click "Continue Scan (ادامه)".', 'paused');
+          break;
+        }
+
+        if (res.tested_count === 0) {
+          isScanning = false;
+          updateScanUIStatus('Finished candidate pool search.', 'stopped');
+          var btn = document.getElementById('startScanBtn');
+          if (btn) btn.disabled = false;
+          break;
+        }
+      } catch (err) {
+        console.error('Scan batch failed:', err);
+        isPaused = true;
+        updateScanUIStatus('Batch error: ' + err.message, 'paused');
+        var btn = document.getElementById('startScanBtn');
+        if (btn) btn.disabled = false;
+        break;
+      }
+    }
+  }
+
+  function renderValidScanTable(results){
+    var body = document.getElementById('warpScanResultsBody');
+    if (!body) return;
+
+    var currentlySelected = document.querySelector('input[name="selectedWarpEndpoint"]:checked');
+    var selectedVal = currentlySelected ? currentlySelected.value : (results.length ? results[0].endpoint : '');
+
+    body.innerHTML = '';
+
+    results.forEach(function(item, idx){
+      var tr = document.createElement('tr');
+      
+      var tdRadio = document.createElement('td');
+      tdRadio.style.textAlign = 'center';
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'selectedWarpEndpoint';
+      radio.value = item.endpoint;
+      if (item.endpoint === selectedVal || (!selectedVal && idx === 0)) {
+        radio.checked = true;
+      }
+      tdRadio.appendChild(radio);
+
+      var tdEp = document.createElement('td');
+      tdEp.style.fontFamily = 'var(--font-mono)';
+      tdEp.style.fontWeight = '600';
+      tdEp.textContent = item.endpoint;
+
+      var tdPing = document.createElement('td');
+      var color = item.delay < 250 ? 'var(--success)' : (item.delay < 450 ? 'orange' : 'var(--danger)');
+      tdPing.innerHTML = '<span style="color:' + color + '; font-weight:bold;">' + item.delay + ' ms</span>';
+
+      var tdType = document.createElement('td');
+      if (item.is_default) {
+        tdType.innerHTML = '<span class="badge" style="background:var(--primary); color:#fff;">Default Reference</span>';
+      } else if (item.is_backup) {
+        tdType.innerHTML = '<span class="badge" style="background:#8a2be2; color:#fff;">Saved Backup</span>';
+      } else {
+        tdType.innerHTML = '<span class="hint">Discovered Candidate</span>';
+      }
+
+      tr.appendChild(tdRadio);
+      tr.appendChild(tdEp);
+      tr.appendChild(tdPing);
+      tr.appendChild(tdType);
+
+      body.appendChild(tr);
+    });
+  }
+
+  window.applySelectedWarpEndpoint = function(){
+    var selected = document.querySelector('input[name="selectedWarpEndpoint"]:checked');
+    if (!selected) {
+      showMessage('Please select a working endpoint from the list', 'danger');
+      return;
+    }
+    var ep = selected.value;
+    api('/api/warp/endpoint/apply', { endpoint: ep }).then(function(data){
+      showMessage(data.message, 'success');
+      loadWarpEndpoint();
+      loadWarpGroups();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  window.resetWarpEndpoint = function(){
+    askConfirm('Reset Endpoint', 'Reset to engage.cloudflareclient.com:2408?', function(){
+      request('/api/warp/endpoint/reset', {}, 'Endpoint reset').then(function(ok){
+        if (ok) {
+          loadWarpEndpoint();
+          loadWarpGroups();
+          var container = document.getElementById('warpScanResultsContainer');
+          if (container) container.style.display = 'none';
+        }
+      });
+    });
+  };
+
   // -----------------------------------------------------------------
   // Live selectors (Clash API) — populates the "Live outbound" column
   // in the Services table (one cell per service row).
@@ -1671,8 +2205,7 @@ const htmlContent = `<!DOCTYPE html>
   // -----------------------------------------------------------------
   async function loadSettings(){
     try {
-      var res = await fetch('/api/settings');
-      var data = await res.json();
+      var data = await getSettingsInfo();
       var box = document.getElementById('adminTokenStatus');
       box.innerHTML = '';
       box.appendChild(statCard('Status', data.admin_token_set ? 'Protected' : 'Not set', data.admin_token_set ? 'var(--success)' : 'var(--danger)'));
@@ -1690,6 +2223,7 @@ const htmlContent = `<!DOCTYPE html>
       api('/api/settings/admin_token', { new_token: token }).then(function(data){
         showMessage(data.message || 'Admin token updated', 'success');
         input.value = '';
+        settingsPromise = null;
         loadSettings();
       }).catch(function(err){
         showMessage(err.message, 'danger');
@@ -1832,6 +2366,21 @@ const htmlContent = `<!DOCTYPE html>
     return cfInfoPromise;
   }
 
+  var settingsPromise = null;
+  function getSettingsInfo(){
+    if (!settingsPromise){
+      settingsPromise = fetch('/api/settings').then(function(r){ 
+        if (!r.ok) throw new Error('API error');
+        return r.json(); 
+      }).catch(function(err){ 
+        console.error('Failed to load settings:', err);
+        settingsPromise = null; 
+        return {}; 
+      });
+    }
+    return settingsPromise;
+  }
+
   // parseUrlParts یک URL کامل (مثلاً از dashboard_public_url یا quick_tunnel_urls) را
   // به scheme/host/port می‌شکند تا بشود دوباره برایش query string ساخت.
   function parseUrlParts(url){
@@ -1850,80 +2399,30 @@ const htmlContent = `<!DOCTYPE html>
   // خودِ DockerServiceها روی ریشه‌ی دامنه (service_hosts.apps) سرو می‌شوند —
   // پس آن‌جا باید صریحاً از service_hosts.apps استفاده کرد. در بقیه‌ی حالت‌ها
   // (quick / tunnel_token / بدون تونل) پنل و سرویس‌ها روی همان یک origin هستند،
-  // پس همان window.location.origin که همین الان پنل با آن باز شده درست است.
+  // ولی اگر کاربر مستقیماً روی پورت مدیریت (apiPort، مثلاً 5000) باشد، پورت به
+  // proxyPort (مثلاً 80) تغییر داده می‌شود تا لینک به سرور reverse proxy اشاره کند.
   async function resolvePublicBaseUrl(){
     var cf = await getCloudflareInfo();
     if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts.apps){
       return 'https://' + cf.service_hosts.apps;
     }
+    var st = await getSettingsInfo();
+    var pPort = (st && st.proxy_port) ? String(st.proxy_port) : '80';
+    var aPort = (st && st.api_port) ? String(st.api_port).replace(/^:/, '') : '5000';
+    var locPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+
+    if (locPort === aPort){
+      var proto = window.location.protocol;
+      var host = window.location.hostname;
+      if ((pPort === '80' && proto === 'http:') || (pPort === '443' && proto === 'https:')){
+        return proto + '//' + host;
+      }
+      return proto + '//' + host + ':' + pPort;
+    }
     return window.location.origin;
   }
 
   // -----------------------------------------------------------------
-  // Docker web apps (xai/kimi/...): هر سرویس زیر <resolvePublicBaseUrl()>/<name>/
-  // از طریق reverse proxy محلی در دسترس است — مستقل از mode تونل.
-  // -----------------------------------------------------------------
-  async function loadDockerServices(){
-    try {
-      var res = await fetch('/api/docker_services');
-      var data = await res.json();
-      var body = document.getElementById('dockerServicesBody');
-      if (!body) return data.services || [];
-      var services = data.services || [];
-      if (!services.length){
-        body.innerHTML = '<tr class="empty-row"><td colspan="4">No Docker web apps added yet.</td></tr>';
-        return services;
-      }
-      var base = await resolvePublicBaseUrl();
-      body.innerHTML = '';
-      services.forEach(function(s){
-        var tr = document.createElement('tr');
-        var tdName = document.createElement('td'); tdName.textContent = s.name;
-        var tdPort = document.createElement('td'); tdPort.className = 'mono'; tdPort.textContent = s.port;
-        var url = base + '/' + s.name + '/';
-        var tdUrl = document.createElement('td'); tdUrl.className = 'mono';
-        var link = document.createElement('a');
-        link.href = url; link.textContent = url; link.target = '_blank'; link.rel = 'noreferrer';
-        tdUrl.appendChild(link);
-        var tdAct = document.createElement('td');
-        var delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-danger btn-sm';
-        delBtn.textContent = 'Delete';
-        delBtn.onclick = function(){
-          askConfirm('Remove ' + s.name + '?', 'This removes its public route at ' + url, function(){
-            api('/api/delete_docker_service', { name: s.name }).then(function(data){
-              showMessage(data.message || 'Removed', 'success');
-              loadDockerServices();
-            }).catch(function(err){ showMessage(err.message, 'danger'); });
-          });
-        };
-        tdAct.appendChild(delBtn);
-        tr.appendChild(tdName); tr.appendChild(tdPort); tr.appendChild(tdUrl); tr.appendChild(tdAct);
-        body.appendChild(tr);
-      });
-      return services;
-    } catch (err){
-      showMessage('Failed to load Docker web apps: ' + err.message, 'danger');
-      return [];
-    }
-  }
-  window.loadDockerServices = loadDockerServices;
-
-  window.addDockerService = function(){
-    var name = document.getElementById('dsName').value.trim().toLowerCase();
-    var port = parseInt(document.getElementById('dsPort').value, 10);
-    if (!name){ showMessage('Name is required', 'danger'); return; }
-    if (isNaN(port) || port < 1 || port > 65535){ showMessage('A valid port (1-65535) is required', 'danger'); return; }
-    api('/api/add_docker_service', { name: name, port: port }).then(function(data){
-      showMessage(data.message || 'Added', 'success');
-      document.getElementById('dsName').value = '';
-      document.getElementById('dsPort').value = '';
-      loadDockerServices();
-    }).catch(function(err){
-      showMessage(err.message, 'danger');
-    });
-  };
-
   // -----------------------------------------------------------------
   // Subscriptions: import proxy nodes from a remote URL or pasted content.
   // Refresh is manual-only (no background scheduler) — the person clicks
@@ -2035,31 +2534,70 @@ const htmlContent = `<!DOCTYPE html>
     BIND_ADDR: 'Bind address (needs manager restart)',
     API_PORT: 'API port (needs manager restart)',
     PROXY_PORT: 'Public reverse proxy port (needs manager restart)',
-    SINGBOX_PATH: 'sing-box binary path override',
-    SINGBOX_VERSION: 'sing-box default version',
-    SINGBOX_INSTALL_DIR: 'sing-box install directory',
-    SINGBOX_NO_AUTO_DOWNLOAD: 'Disable sing-box auto-download (set to "1")',
-    CLOUDFLARED_PATH: 'cloudflared binary path override',
-    CLOUDFLARED_INSTALL_DIR: 'cloudflared install directory'
+    DEFAULT_SERVICES: 'Default proxy services (name:port, e.g. telegram:2083)',
+    CLASH_SECRET: 'Clash API Secret (password)',
+    CLASH_API_PORT: 'Clash / sing-box API port',
+    MIXED_PORT: 'Mixed proxy port',
+    OMNIROUTE_PORT: 'OmniRoute port',
+    MIMO_PORT: 'MimoApi port',
+    KIMI_PORT: 'KimiApi port',
+    DEEPSEEK_PORT: 'DeepSeekApi port',
+    ZAI_PORT: 'ZaiApi / GlmApi port',
+    GROK2API_PORT: 'Grok2Api port',
+    FLARESOLVERR_PORT: 'FlareSolverr port'
   };
   async function loadEnvSettings(){
     try {
       var res = await fetch('/api/settings/env');
       var data = await res.json();
       var box = document.getElementById('envSettingsBody');
+      if (!box) return;
       box.innerHTML = '';
-      Object.keys(envSettingLabels).forEach(function(key){
-        var s = (data.settings && data.settings[key]) || {};
+      
+      var settings = data.settings || {};
+      var keys = Object.keys(envSettingLabels);
+      Object.keys(settings).forEach(function(k){
+        if (keys.indexOf(k) === -1) {
+          keys.push(k);
+        }
+      });
+
+      keys.forEach(function(key){
+        var s = settings[key] || {};
+        var val = s.value || s.default_value || '';
+        
+        var extInput = document.getElementById('env_' + key);
+        if (extInput && extInput.closest('#envSettingsBody') === null) {
+            extInput.value = val;
+            if (s.overridden_by_ui) extInput.placeholder = '(overridden: ' + s.value + ')';
+            else if (s.env_value_present) extInput.placeholder = '(env: ' + s.value + ')';
+            else if (s.default_value) extInput.placeholder = '(default: ' + s.default_value + ')';
+        }
+        
+        if (key.startsWith('BACKUP_') || key.startsWith('SINGBOX_') || key.startsWith('CLOUDFLARED_')) {
+            return;
+        }
+
         var row = document.createElement('div');
         row.className = 'field';
         row.style.marginBottom = '10px';
         var label = document.createElement('label');
-        label.textContent = envSettingLabels[key];
+        label.textContent = envSettingLabels[key] || key;
         var input = document.createElement('input');
         input.type = 'text';
         input.id = 'env_' + key;
-        input.value = s.value || '';
-        input.placeholder = s.env_value_present ? '(set via environment variable)' : '';
+        input.value = val;
+
+        if (s.overridden_by_ui) {
+          input.placeholder = '(overridden in UI: ' + s.value + ')';
+        } else if (s.env_value_present) {
+          input.placeholder = '(environment variable: ' + s.value + ')';
+        } else if (s.default_value) {
+          input.placeholder = '(default: ' + s.default_value + ')';
+        } else {
+          input.placeholder = '(optional / not set)';
+        }
+
         row.appendChild(label);
         row.appendChild(input);
         box.appendChild(row);
@@ -2078,11 +2616,42 @@ const htmlContent = `<!DOCTYPE html>
     });
     api('/api/settings/env/update', body).then(function(data){
       showMessage(data.message || 'Saved', 'success');
+      settingsPromise = null;
+      loadEnvSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  }
+
+  window.saveSingboxEnvSettings = function(){
+    var body = {
+      SINGBOX_PATH: document.getElementById('env_SINGBOX_PATH').value,
+      SINGBOX_VERSION: document.getElementById('env_SINGBOX_VERSION').value,
+      SINGBOX_INSTALL_DIR: document.getElementById('env_SINGBOX_INSTALL_DIR').value,
+      SINGBOX_NO_AUTO_DOWNLOAD: document.getElementById('env_SINGBOX_NO_AUTO_DOWNLOAD').value
+    };
+    api('/api/settings/env/update', body).then(function(data){
+      showMessage('sing-box configuration saved', 'success');
+      settingsPromise = null;
       loadEnvSettings();
     }).catch(function(err){
       showMessage(err.message, 'danger');
     });
   };
+
+  window.saveCloudflaredEnvSettings = function(){
+    var body = {
+      CLOUDFLARED_PATH: document.getElementById('env_CLOUDFLARED_PATH').value,
+      CLOUDFLARED_INSTALL_DIR: document.getElementById('env_CLOUDFLARED_INSTALL_DIR').value
+    };
+    api('/api/settings/env/update', body).then(function(data){
+      showMessage('Cloudflared configuration saved', 'success');
+      settingsPromise = null;
+      loadEnvSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };;
 
   // -----------------------------------------------------------------
   // Backup & Restore
@@ -2156,11 +2725,41 @@ const htmlContent = `<!DOCTYPE html>
           body.appendChild(tr);
         });
       }
+      toggleBackupVisibility();
     } catch (err){
       showMessage('Failed to load backup settings: ' + err.message, 'danger');
     }
   }
   window.loadBackupSettings = loadBackupSettings;
+
+  window.toggleBackupVisibility = function() {
+    var toggle = function(checkboxId, fieldIds) {
+      var isChecked = document.getElementById(checkboxId).checked;
+      fieldIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+          var parent = el.closest('.field');
+          if (parent) {
+            parent.style.display = isChecked ? '' : 'none';
+          } else {
+            el.style.display = isChecked ? '' : 'none';
+          }
+        }
+      });
+    };
+
+    // Schedule
+    document.getElementById('bkHourlyKeep').style.display = document.getElementById('bkHourlyEnabled').checked ? '' : 'none';
+    document.getElementById('bkDailyKeep').style.display = document.getElementById('bkDailyEnabled').checked ? '' : 'none';
+    document.getElementById('bkMonthlyKeep').style.display = document.getElementById('bkMonthlyEnabled').checked ? '' : 'none';
+
+    // S3
+    toggle('bkS3Enabled', ['bkS3Endpoint', 'bkS3Region', 'bkS3Bucket', 'bkS3AccessKey', 'bkS3SecretKey', 'bkS3Prefix', 'bkS3UseSSL']);
+    // R2
+    toggle('bkR2Enabled', ['bkR2Bucket', 'bkR2AccessKey', 'bkR2SecretKey', 'bkR2Prefix', 'btnCreateR2', 'bkR2HelpText']); 
+    // Telegram
+    toggle('bkTgEnabled', ['bkTgBotToken', 'bkTgChatId', 'bkTgHelpText']);
+  };
 
   window.saveBackupSettings = function(){
     var body = {
@@ -2234,38 +2833,24 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadDashboardFrame(){
     var frame = document.getElementById('dashboardFrame');
-    var localPort = '9090', secret = '';
+    if (!frame) return;
+    var secret = '';
     if (lastTemplate){
       try {
         var clash = lastTemplate.experimental.clash_api;
-        if (clash.external_controller) localPort = clash.external_controller.split(':').pop();
         if (clash.secret) secret = clash.secret;
       } catch (e){ /* template not loaded yet, use defaults */ }
     }
 
-    // مثل resolveServicePublicUrl: به‌جای فرض "همین هاست، پورت دیگر"، آدرس واقعی
-    // Clash API را از یکی از این منابع می‌گیریم (به ترتیب اولویت):
-    //   ۱) dashboard_public_url دستی (حالت tunnel_token با ingress دستی)
-    //   ۲) هاست‌نیم "dash.<domain>" که تونل api_token خودکار ساخته (پورت 443، https)
-    //   ۳) URL کامل Quick Tunnel برای dash (هم پورت هم اسکیم را از خودش می‌گیریم)
-    //   ۴) بدون تونل: همان رفتار قدیمی hostname:پورت محلی
-    var cf = await getCloudflareInfo();
-    var scheme, host, port;
-    if (cf.dashboard_public_url){
-      var p = parseUrlParts(cf.dashboard_public_url);
-      scheme = p.scheme; host = p.host; port = p.port;
-    } else if (cf.mode === 'api_token' && cf.service_hosts && cf.service_hosts['dash']){
-      scheme = 'https'; host = cf.service_hosts['dash']; port = '443';
-    } else if (cf.mode === 'quick' && cf.quick_tunnel_urls && cf.quick_tunnel_urls['dash']){
-      var pq = parseUrlParts(cf.quick_tunnel_urls['dash']);
-      scheme = pq.scheme; host = pq.host; port = pq.port;
-    } else {
-      scheme = 'http'; host = window.location.hostname; port = localPort;
-    }
+    var base = await resolvePublicBaseUrl();
+    
+    // For fallback URL, we need to extract host and port from the base URL
+    var p = parseUrlParts(base);
+    var host = p.host || window.location.hostname;
+    var port = p.port || (p.scheme === 'https' ? '443' : '80');
 
-    var portSuffix = (port && port !== '443' && port !== '80') ? (':' + port) : '';
-    var localUrl = scheme + '://' + host + portSuffix + '/ui/';
     var fallbackUrl = 'https://metacubexd.pages.dev/#/setup?hostname=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port) + '&secret=' + encodeURIComponent(secret);
+    var localUrl = base + '/singbox/ui/#/setup?hostname=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port) + '&secret=' + encodeURIComponent(secret);
 
     var fallbackTimer = setTimeout(function(){
       showMessage('Local dashboard not reachable yet, falling back to metacubexd.pages.dev', 'success');
@@ -2346,6 +2931,12 @@ type DockerService struct {
 // outbound به شکل sing-box) هرگز اینجا یا در template.json ذخیره نمی‌شود — در
 // فایل جدای subscriptionsDir/<Name>.json نگه‌داری می‌شود (رجوع کنید به
 // refreshSubscription/renderConfig) تا template.json دستی کوچک و تمیز بماند.
+type ServiceDef struct {
+	Name       string `json:"name"`
+	ListenPort int    `json:"listen_port"`
+	ProxyPort  int    `json:"proxy_port"`
+}
+
 type Subscription struct {
 	Name string `json:"name"` // شناسه‌ی یکتا؛ هم برای نام‌گذاری گروه (Name-auto) و هم پیشوند تگ (Name/tag) استفاده می‌شود
 	// SourceType: "remote" (Content نادیده گرفته می‌شود، URL هر بار fetch می‌شود)
@@ -2387,13 +2978,17 @@ type CloudflareConfig struct {
 
 type AppState struct {
 	DefaultWarpGroup string `json:"default_warp_group"`
+	GlobalWarpEndpoint string `json:"global_warp_endpoint,omitempty"`
+	BackupWarpEndpoints []string `json:"backup_warp_endpoints,omitempty"`
 	// AdminToken در صورت تنظیم از صفحه‌ی Settings، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	AdminToken string `json:"admin_token,omitempty"`
 	// Cloudflare تنظیمات تونل (هر سه حالت) را نگه می‌دارد.
 	Cloudflare CloudflareConfig `json:"cloudflare,omitempty"`
-	// DockerServices فهرست وب‌سرویس‌های جدا (zai/grok/deepseek و غیره) است — هرکدام
-	// زیر پیشوند مسیر "/" + Name روی reverse proxy محلی سرو می‌شود.
+	// DockerServices برای سازگاری با نسخه‌های قبل نگه‌داشته شده است و در
+	// readStateOrDefault به Services منتقل می‌شود.
 	DockerServices []DockerService `json:"docker_services,omitempty"`
+	// Services فهرست وب‌سرویس‌ها و پروکسی‌های اختصاصی (zai/grok/deepseek و غیره)
+	Services []ServiceDef `json:"services,omitempty"`
 	// Subscriptions فهرست منابع subscription (remote URL یا محتوای local پیست‌شده) است.
 	// خروجی پارس‌شده‌ی هر کدام در subscriptionsDir/<name>.json نگه‌داری می‌شود، نه اینجا
 	// (اینجا فقط متادیتا/تنظیمات منبع است).
@@ -2408,6 +3003,20 @@ func readStateOrDefault() AppState {
 	if err := readJSON(stateFile, &s); err != nil {
 		return AppState{}
 	}
+
+	// Migrate legacy DockerServices to Services
+	if len(s.DockerServices) > 0 {
+		for _, ds := range s.DockerServices {
+			s.Services = append(s.Services, ServiceDef{
+				Name:       ds.Name,
+				ListenPort: ds.Port,
+				ProxyPort:  0,
+			})
+		}
+		s.DockerServices = nil
+		_ = writeState(s) // save immediately after migration
+	}
+
 	return s
 }
 
@@ -2735,7 +3344,7 @@ func parseDefaultServices() []defaultServiceDef {
 func bootstrapFreshInstall() {
 	log.Println("No existing template.json/nodes.json found — bootstrapping a fresh default setup")
 
-	clashSecret := randomString(24)
+	clashSecret := getEnvDefault("CLASH_SECRET", "")
 	tmplStr := strings.Replace(defaultTemplateRich, "__CLASH_SECRET__", clashSecret, 1)
 	tmplStr = strings.Replace(tmplStr, "__CLASH_API_PORT__", getEnvDefault("CLASH_API_PORT", "9090"), 1)
 
@@ -2752,7 +3361,7 @@ func bootstrapFreshInstall() {
 	if err != nil {
 		log.Printf("bootstrap: could not auto-register a WARP account (%v) — starting with zero WARP nodes; add one from the WARP Nodes tab once the manager is up", err)
 	} else {
-		configs, genErr := GenerateWireGuardConfigs("WARP", account, warpEndpoints)
+		configs, genErr := GenerateWireGuardConfigs("WARP", account, []string{getGlobalWarpEndpoint()})
 		if genErr != nil {
 			log.Printf("bootstrap: failed to generate WARP endpoint configs: %v", genErr)
 		} else {
@@ -2767,17 +3376,36 @@ func bootstrapFreshInstall() {
 		}
 	}
 
-	defaultTarget := "auto"
-	if state.DefaultWarpGroup != "" {
-		defaultTarget = state.DefaultWarpGroup + "-auto"
+	defaultServices := []ServiceDef{
+		{Name: "mimo", ListenPort: 3003, ProxyPort: 2003},
+		{Name: "kimi", ListenPort: 3002, ProxyPort: 2002},
+		{Name: "deepseek", ListenPort: 3005, ProxyPort: 2005},
+		{Name: "zai", ListenPort: 3001, ProxyPort: 2001},
+		{Name: "grok2api", ListenPort: 3004, ProxyPort: 2004},
+		{Name: "flaresolverr", ListenPort: 8191, ProxyPort: 0},
 	}
+	// Add user-defined default proxy services (ProxyPort only)
 	for _, svc := range parseDefaultServices() {
-		if err := addServiceToTemplate(tmpl, svc.Name, svc.Port, defaultTarget); err != nil {
-			log.Printf("bootstrap: could not add default service %q: %v", svc.Name, err)
-		} else {
-			log.Printf("Created default service %q on port %d (default outbound: %s)", svc.Name, svc.Port, defaultTarget)
+		// check if it overrides an existing default by name
+		found := false
+		for i, ds := range defaultServices {
+			if ds.Name == svc.Name {
+				defaultServices[i].ProxyPort = svc.Port
+				found = true
+				break
+			}
+		}
+		if !found {
+			defaultServices = append(defaultServices, ServiceDef{
+				Name:       svc.Name,
+				ListenPort: 0, // Proxy-only services don't need a listen port initially, or it can be left 0
+				ProxyPort:  svc.Port,
+			})
 		}
 	}
+	state.Services = defaultServices
+
+	syncServicesToTemplate(state, tmpl)
 
 	if err := writeState(state); err != nil {
 		log.Printf("bootstrap: failed to write state.json: %v", err)
@@ -3203,6 +3831,13 @@ var (
 )
 
 func startSingBoxLocked(path string) (*managedProcess, error) {
+	if runtime.GOOS == "windows" {
+		// پاکسازی پروسه‌های یتیم قبلی sing-box که از اجراهای قبلی/کرش‌ها قفل روی cache.db مانده‌اند
+		binName := filepath.Base(path)
+		_ = exec.Command("taskkill", "/F", "/IM", binName).Run()
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	cmd := exec.Command(path, "run", "-c", configFile)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -3218,13 +3853,20 @@ func startSingBoxLocked(path string) (*managedProcess, error) {
 	return mp, nil
 }
 
-// stopProcess به‌آرامی پروسه را متوقف می‌کند (با Interrupt) و در صورت timeout آن را Kill می‌کند.
+// stopProcess به‌آرامی پروسه را متوقف می‌کند و در صورت نیاز آن را Kill می‌کند.
 // Wait() فقط یک‌بار و فقط توسط گوروتین راه‌اندازی‌شده در startSingBoxLocked فراخوانی می‌شود.
 func stopProcess(mp *managedProcess) {
 	if mp == nil || mp.cmd == nil || mp.cmd.Process == nil {
 		return
 	}
-	_ = mp.cmd.Process.Signal(os.Interrupt)
+	if runtime.GOOS == "windows" {
+		// در ویندوز os.Interrupt روی پروسه‌های فرزند exec.Command کار نمی‌کند.
+		// با taskkill پروسه را بلافاصله بسته‌شده و قفل فایل کش رها می‌شود.
+		_ = exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprint(mp.cmd.Process.Pid)).Run()
+		_ = mp.cmd.Process.Kill()
+	} else {
+		_ = mp.cmd.Process.Signal(os.Interrupt)
+	}
 	select {
 	case <-mp.done:
 	case <-time.After(singBoxStopTimeout):
@@ -3880,6 +4522,25 @@ func stopCloudflared_locked() {
 // computeTunnelRoutes و rebuildProxyRoutes)، آن تابع حذف شد.
 
 // ---------------------------------------------------------------------
+// تولید تنظیمات WireGuard برای اکانت‌های WARP
+// ---------------------------------------------------------------------
+
+func getGlobalWarpEndpoint() string {
+	ep := readStateOrDefault().GlobalWarpEndpoint
+	if ep == "" {
+		return "engage.cloudflareclient.com:2408"
+	}
+	return ep
+}
+
+func groupPrefixForTag(tag string) (prefix string, grouped bool) {
+    if strings.HasPrefix(tag, "WARP-") {
+        return "WARP", true
+    }
+	return tag, false
+}
+
+// ---------------------------------------------------------------------
 // ثبت‌نام حساب WARP
 // ---------------------------------------------------------------------
 const (
@@ -4144,32 +4805,7 @@ func GenerateWireGuardConfigs(prefix string, account *WarpAccount, endpoints []s
 // است. راه‌حل قابل‌اعتماد: چون لیست warpEndpoints ثابت و از قبل شناخته‌شده است،
 // برای هر تگ، طولانی‌ترین پسوند شناخته‌شده‌ی منطبق را پیدا می‌کنیم؛ باقیمانده
 // همان prefix/گروه است. این هم روی تگ‌های تازه و هم روی نمونه‌های قدیمی کار می‌کند.
-var warpEndpointSuffixes []string
 
-func init() {
-	for _, ep := range warpEndpoints {
-		host, port, err := parseEndpoint(ep)
-		if err != nil {
-			continue
-		}
-		warpEndpointSuffixes = append(warpEndpointSuffixes, fmt.Sprintf("-%s:%d", host, port))
-	}
-	sort.Slice(warpEndpointSuffixes, func(i, j int) bool {
-		return len(warpEndpointSuffixes[i]) > len(warpEndpointSuffixes[j])
-	})
-}
-
-// groupPrefixForTag تگ یک اندپوینت WireGuard را به prefix/گروهش می‌شکند.
-// اگر تگ با فرمت شناخته‌شده مطابقت نداشت (مثلاً یک نود دستی/سفارشی)، خود تگ
-// به‌عنوان یک گروه تک‌عضوی درنظر گرفته می‌شود و grouped برابر false برمی‌گردد.
-func groupPrefixForTag(tag string) (prefix string, grouped bool) {
-	for _, suf := range warpEndpointSuffixes {
-		if len(tag) > len(suf) && strings.HasSuffix(tag, suf) {
-			return tag[:len(tag)-len(suf)], true
-		}
-	}
-	return tag, false
-}
 
 // ---------------------------------------------------------------------
 // رندر / اعتبارسنجی / persist کانفیگ (بازنویسی کامل و اصلاح‌شده)
@@ -4542,9 +5178,11 @@ func getConfigsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error reading nodes.json: %v", err)
 		nodesData = []byte("[]")
 	}
+	state := readStateOrDefault()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"template": string(tmplData),
 		"nodes":    string(nodesData),
+		"services": state.Services,
 	})
 }
 
@@ -4598,58 +5236,109 @@ func rebuildHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Configuration saved, validated, and sing-box restarted successfully!"})
 }
 
-// addServiceToTemplate یک سرویس جدید (in-<name> + select-<name> + قانون route)
-// را به tmpl اضافه می‌کند. هم توسط addServiceHandler و هم در bootstrap نصب تازه
-// استفاده می‌شود تا رفتار کاملاً یکسان باشد.
-func addServiceToTemplate(tmpl map[string]interface{}, name string, port int, defaultTarget string) error {
+// syncServicesToTemplate updates sing-box inbounds, outbounds, and route rules
+// based on the current state.Services. It only creates proxies for services
+// that have ProxyPort > 0.
+func syncServicesToTemplate(state AppState, tmpl map[string]interface{}) {
+	defaultTarget := "auto"
+	if state.DefaultWarpGroup != "" {
+		defaultTarget = state.DefaultWarpGroup + "-auto"
+	}
+
+	// 1. Clean existing service inbounds/outbounds/rules
+	var newInbounds []interface{}
 	for _, in := range asSlice(tmpl["inbounds"]) {
-		m, ok := in.(map[string]interface{})
+		inMap, ok := in.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if m["tag"] == "in-"+name {
-			return fmt.Errorf("service %q already exists", name)
+		tag, _ := inMap["tag"].(string)
+		if strings.HasPrefix(tag, "in-") && tag != "in-global" && tag != "in-auto" && tag != "in-direct" {
+			continue // remove old service inbounds
 		}
-		if pf, ok := toFloat(m["listen_port"]); ok && int(pf) == port {
-			return fmt.Errorf("port %d is already used by another service", port)
+		newInbounds = append(newInbounds, in)
+	}
+
+	var newOutbounds []interface{}
+	for _, out := range asSlice(tmpl["outbounds"]) {
+		outMap, ok := out.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tag, _ := outMap["tag"].(string)
+		if strings.HasPrefix(tag, "select-") {
+			continue // remove old service outbounds
+		}
+		newOutbounds = append(newOutbounds, out)
+	}
+
+	if route, ok := tmpl["route"].(map[string]interface{}); ok {
+		var newRules []interface{}
+		for _, rule := range asSlice(route["rules"]) {
+			ruleMap, _ := rule.(map[string]interface{})
+			isServiceRule := false
+			for _, tagAny := range asSlice(ruleMap["inbound"]) {
+				tag, _ := tagAny.(string)
+				if strings.HasPrefix(tag, "in-") && tag != "in-global" && tag != "in-auto" && tag != "in-direct" {
+					isServiceRule = true
+					break
+				}
+			}
+			if !isServiceRule {
+				newRules = append(newRules, rule)
+			}
+		}
+		route["rules"] = newRules
+		tmpl["route"] = route
+	}
+
+	// 2. Add services with ProxyPort > 0
+	for _, svc := range state.Services {
+		if svc.ProxyPort <= 0 {
+			continue
+		}
+
+		inboundTag := "in-" + svc.Name
+		selectorTag := "select-" + svc.Name
+
+		newInbounds = append(newInbounds, map[string]interface{}{
+			"tag":         inboundTag,
+			"listen":      "127.0.0.1",
+			"listen_port": svc.ProxyPort,
+			"type":        "mixed",
+		})
+
+		sel := map[string]interface{}{
+			"tag":       selectorTag,
+			"type":      "selector",
+			"outbounds": []interface{}{"auto"},
+		}
+		if defaultTarget != "" {
+			sel["default"] = defaultTarget
+		}
+		newOutbounds = append(newOutbounds, sel)
+
+		// Rule to map inbound to outbound
+		if route, ok := tmpl["route"].(map[string]interface{}); ok {
+			rules := asSlice(route["rules"])
+			rules = append(rules, map[string]interface{}{
+				"inbound":  []interface{}{inboundTag},
+				"outbound": selectorTag,
+			})
+			route["rules"] = rules
+			tmpl["route"] = route
 		}
 	}
 
-	tmpl["inbounds"] = append(asSlice(tmpl["inbounds"]), map[string]interface{}{
-		"tag":         "in-" + name,
-		"listen":      "127.0.0.1",
-		"listen_port": port,
-		"type":        "mixed",
-	})
-
-	sel := map[string]interface{}{
-		"tag":       "select-" + name,
-		"type":      "selector",
-		"outbounds": []interface{}{"auto"},
-	}
-	if defaultTarget != "" {
-		sel["default"] = defaultTarget
-	}
-	tmpl["outbounds"] = append(asSlice(tmpl["outbounds"]), sel)
-
-	route, _ := tmpl["route"].(map[string]interface{})
-	if route == nil {
-		route = map[string]interface{}{}
-	}
-	newRule := map[string]interface{}{
-		"action":   "route",
-		"inbound":  []interface{}{"in-" + name},
-		"outbound": "select-" + name,
-	}
-	route["rules"] = append([]interface{}{newRule}, asSlice(route["rules"])...)
-	tmpl["route"] = route
-	return nil
+	tmpl["inbounds"] = newInbounds
+	tmpl["outbounds"] = newOutbounds
 }
 
 func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
-		Port int    `json:"port"`
+		Name       string `json:"name"`
+		ListenPort int    `json:"listen_port"`
+		ProxyPort  int    `json:"proxy_port,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("addServiceHandler: invalid JSON: %v", err)
@@ -4657,19 +5346,53 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	log.Printf("addServiceHandler: name=%s, port=%d", req.Name, req.Port)
+	log.Printf("addServiceHandler: name=%s, listen_port=%d, proxy_port=%d", req.Name, req.ListenPort, req.ProxyPort)
 
 	if !serviceNameRe.MatchString(req.Name) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Service name must be 1-32 characters: letters, digits, underscore, hyphen"})
 		return
 	}
-	if req.Port < 1 || req.Port > 65535 {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid port (1-65535)"})
+	if req.ListenPort < 1 || req.ListenPort > 65535 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid listen port (1-65535)"})
+		return
+	}
+	if req.ProxyPort != 0 && (req.ProxyPort < 1 || req.ProxyPort > 65535) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid proxy port (1-65535)"})
+		return
+	}
+	if reservedServiceNames[req.Name] {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is a reserved name and cannot be used for a service", req.Name)})
 		return
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
+
+	state := readStateOrDefault()
+	for _, s := range state.Services {
+		if s.Name == req.Name {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Service %q already exists", req.Name)})
+			return
+		}
+		if s.ListenPort == req.ListenPort {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q", req.ListenPort, s.Name)})
+			return
+		}
+		if req.ProxyPort != 0 && s.ProxyPort == req.ProxyPort {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Proxy port %d is already in use by %q", req.ProxyPort, s.Name)})
+			return
+		}
+	}
+
+	state.Services = append(state.Services, ServiceDef{
+		Name:       req.Name,
+		ListenPort: req.ListenPort,
+		ProxyPort:  req.ProxyPort,
+	})
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
+		return
+	}
 
 	var tmpl map[string]interface{}
 	if err := readJSON(templateFile, &tmpl); err != nil {
@@ -4684,23 +5407,15 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := readStateOrDefault()
-	defaultTarget := "auto"
-	if state.DefaultWarpGroup != "" {
-		defaultTarget = state.DefaultWarpGroup + "-auto"
-	}
-
-	if err := addServiceToTemplate(tmpl, req.Name, req.Port, defaultTarget); err != nil {
-		jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": err.Error()})
-		return
-	}
+	syncServicesToTemplate(state, tmpl)
 
 	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
-		log.Printf("addServiceHandler: %v", err)
+		log.Printf("addServiceHandler: applyChange: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Service added, validated, and sing-box restarted successfully!"})
+	rebuildProxyRoutes()
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Service added successfully!"})
 }
 
 func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -4708,73 +5423,23 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("deleteServiceHandler: invalid JSON: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	log.Printf("deleteServiceHandler: name=%s", req.Name)
-
-	if req.Name == "" {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Service name is required"})
-		return
-	}
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	var tmpl map[string]interface{}
-	if err := readJSON(templateFile, &tmpl); err != nil {
-		log.Printf("deleteServiceHandler: failed to read template.json: %v", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
-		return
-	}
-	var nodes []interface{}
-	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
-		log.Printf("deleteServiceHandler: failed to read nodes.json: %v", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
-		return
-	}
-
+	state := readStateOrDefault()
 	found := false
-	var newInbounds []interface{}
-	for _, in := range asSlice(tmpl["inbounds"]) {
-		inMap, _ := in.(map[string]interface{})
-		if inMap["tag"] == "in-"+req.Name {
+	var kept []ServiceDef
+	for _, s := range state.Services {
+		if s.Name == req.Name {
 			found = true
 			continue
 		}
-		newInbounds = append(newInbounds, in)
-	}
-	tmpl["inbounds"] = newInbounds
-
-	var newOutbounds []interface{}
-	for _, out := range asSlice(tmpl["outbounds"]) {
-		outMap, _ := out.(map[string]interface{})
-		if outMap["tag"] == "select-"+req.Name {
-			continue
-		}
-		newOutbounds = append(newOutbounds, out)
-	}
-	tmpl["outbounds"] = newOutbounds
-
-	if route, ok := tmpl["route"].(map[string]interface{}); ok {
-		var newRules []interface{}
-		for _, rule := range asSlice(route["rules"]) {
-			ruleMap, _ := rule.(map[string]interface{})
-			isTarget := false
-			for _, tag := range asSlice(ruleMap["inbound"]) {
-				if tagStr, ok := tag.(string); ok && tagStr == "in-"+req.Name {
-					isTarget = true
-					break
-				}
-			}
-			if !isTarget {
-				newRules = append(newRules, rule)
-			}
-		}
-		route["rules"] = newRules
-		tmpl["route"] = route
+		kept = append(kept, s)
 	}
 
 	if !found {
@@ -4782,11 +5447,30 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	state.Services = kept
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
+		return
+	}
+
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
+		return
+	}
+	var nodes []interface{}
+	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
+		return
+	}
+
+	syncServicesToTemplate(state, tmpl)
+
 	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
-		log.Printf("deleteServiceHandler: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
 	}
+	rebuildProxyRoutes()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Service '%s' deleted successfully!", req.Name)})
 }
 
@@ -4794,18 +5478,17 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 // تگ selector مرتبط، و ارجاع‌های route rule را هماهنگ به‌روزرسانی می‌کند.
 func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OldName string `json:"old_name"`
-		NewName string `json:"new_name"`
-		NewPort int    `json:"new_port"`
+		OldName       string `json:"old_name"`
+		NewName       string `json:"new_name"`
+		NewListenPort int    `json:"new_listen_port"`
+		NewProxyPort  int    `json:"new_proxy_port,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("editServiceHandler: invalid JSON: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
 		return
 	}
 	req.OldName = strings.TrimSpace(req.OldName)
 	req.NewName = strings.TrimSpace(req.NewName)
-	log.Printf("editServiceHandler: old_name=%s, new_name=%s, new_port=%d", req.OldName, req.NewName, req.NewPort)
 
 	if req.OldName == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "old_name is required"})
@@ -4815,90 +5498,79 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Service name must be 1-32 characters: letters, digits, underscore, hyphen"})
 		return
 	}
-	if req.NewPort < 1 || req.NewPort > 65535 {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid port (1-65535)"})
+	if req.NewListenPort < 1 || req.NewListenPort > 65535 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid listen port (1-65535)"})
+		return
+	}
+	if req.NewProxyPort != 0 && (req.NewProxyPort < 1 || req.NewProxyPort > 65535) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid proxy port (1-65535)"})
+		return
+	}
+	if req.NewName != req.OldName && reservedServiceNames[req.NewName] {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is a reserved name", req.NewName)})
 		return
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 
+	state := readStateOrDefault()
+
+	// Validation pass
+	targetIdx := -1
+	for i, s := range state.Services {
+		if s.Name == req.OldName {
+			targetIdx = i
+		} else {
+			if s.Name == req.NewName {
+				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Service %q already exists", req.NewName)})
+				return
+			}
+			if s.ListenPort == req.NewListenPort {
+				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q", req.NewListenPort, s.Name)})
+				return
+			}
+			if req.NewProxyPort != 0 && s.ProxyPort == req.NewProxyPort {
+				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Proxy port %d is already in use by %q", req.NewProxyPort, s.Name)})
+				return
+			}
+		}
+	}
+
+	if targetIdx == -1 {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.OldName)})
+		return
+	}
+
+	state.Services[targetIdx] = ServiceDef{
+		Name:       req.NewName,
+		ListenPort: req.NewListenPort,
+		ProxyPort:  req.NewProxyPort,
+	}
+
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
+		return
+	}
+
 	var tmpl map[string]interface{}
 	if err := readJSON(templateFile, &tmpl); err != nil {
-		log.Printf("editServiceHandler: failed to read template.json: %v", err)
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
 		return
 	}
 	var nodes []interface{}
 	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
-		log.Printf("editServiceHandler: failed to read nodes.json: %v", err)
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
 		return
 	}
 
-	oldInboundTag := "in-" + req.OldName
-	newInboundTag := "in-" + req.NewName
-	oldSelectorTag := "select-" + req.OldName
-	newSelectorTag := "select-" + req.NewName
-	nameChanged := req.NewName != req.OldName
-
-	var targetInbound map[string]interface{}
-	for _, in := range asSlice(tmpl["inbounds"]) {
-		m, ok := in.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if m["tag"] == oldInboundTag {
-			targetInbound = m
-			continue
-		}
-		if nameChanged && m["tag"] == newInboundTag {
-			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("A service named %q already exists", req.NewName)})
-			return
-		}
-		if pf, ok := toFloat(m["listen_port"]); ok && int(pf) == req.NewPort {
-			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Port %d is already used by another service", req.NewPort)})
-			return
-		}
-	}
-	if targetInbound == nil {
-		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.OldName)})
-		return
-	}
-
-	targetInbound["tag"] = newInboundTag
-	targetInbound["listen_port"] = req.NewPort
-
-	if nameChanged {
-		for _, out := range asSlice(tmpl["outbounds"]) {
-			if m, ok := out.(map[string]interface{}); ok && m["tag"] == oldSelectorTag {
-				m["tag"] = newSelectorTag
-			}
-		}
-		if route, ok := tmpl["route"].(map[string]interface{}); ok {
-			for _, rule := range asSlice(route["rules"]) {
-				ruleMap, ok := rule.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				inboundList := asSlice(ruleMap["inbound"])
-				for i, tag := range inboundList {
-					if tagStr, ok := tag.(string); ok && tagStr == oldInboundTag {
-						inboundList[i] = newInboundTag
-					}
-				}
-				if ob, ok := ruleMap["outbound"].(string); ok && ob == oldSelectorTag {
-					ruleMap["outbound"] = newSelectorTag
-				}
-			}
-		}
-	}
+	syncServicesToTemplate(state, tmpl)
 
 	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
-		log.Printf("editServiceHandler: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
 	}
+	rebuildProxyRoutes()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Service %q updated", req.NewName)})
 }
 
@@ -6235,20 +6907,31 @@ var currentProxyMux atomic.Pointer[http.ServeMux]
 // فعلی می‌سازد. هر سرویس با http.StripPrefix پیشوند خودش را از مسیر حذف
 // می‌کند تا upstream دقیقاً همان مسیری را ببیند که برای خودش انتظار دارد
 // (مثلاً "/xai/v1/models" → upstream فقط "/v1/models" را می‌بیند).
-func buildProxyMux(services []DockerService) *http.ServeMux {
+func buildProxyMux(services []ServiceDef) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	for _, svc := range services {
-		target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", svc.Port))
+		target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", svc.ListenPort))
 		if err != nil {
 			log.Printf("buildProxyMux: skipping %q: %v", svc.Name, err)
 			continue
 		}
 		name := svc.Name
+		prefix := "/" + name
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(pr *httputil.ProxyRequest) {
 				pr.SetURL(target)
 				pr.Out.Host = target.Host
+				pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
+			},
+			ModifyResponse: func(res *http.Response) error {
+				if loc := res.Header.Get("Location"); loc != "" {
+					if u, err := url.Parse(loc); err == nil && u.Host == "" && strings.HasPrefix(u.Path, "/") {
+						u.Path = prefix + u.Path
+						res.Header.Set("Location", u.String())
+					}
+				}
+				return nil
 			},
 			// FlushInterval=-1 یعنی هر write بلافاصله flush می‌شود — بدون این،
 			// پاسخ‌های stream=true (SSE، مثل OpenAI/Anthropic-style APIها) بافر و
@@ -6258,9 +6941,9 @@ func buildProxyMux(services []DockerService) *http.ServeMux {
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				log.Printf("reverse proxy: /%s -> %s failed: %v", name, target, err)
 				w.WriteHeader(http.StatusBadGateway)
+				_, _ = fmt.Fprintf(w, "Bad Gateway: Service %q on 127.0.0.1:%d is unreachable (%v)\n", name, svc.ListenPort, err)
 			},
 		}
-		prefix := "/" + name
 		stripped := http.StripPrefix(prefix, proxy)
 		mux.Handle(prefix+"/", stripped)
 		// درخواست بدون "/" انتهایی را هم پاسخ بده — کلاینت‌های OpenAI/Anthropic-style
@@ -6270,6 +6953,15 @@ func buildProxyMux(services []DockerService) *http.ServeMux {
 			r2.URL.Path = prefix + "/"
 			stripped.ServeHTTP(w, r2)
 		})
+
+		// برای داشبوردهایی مثل metacubexd که مستقیماً به روت درخواست می‌دهند
+		if name == "singbox" {
+			clashEndpoints := []string{"/proxies", "/configs", "/logs", "/traffic", "/connections", "/providers", "/rules", "/version"}
+			for _, p := range clashEndpoints {
+				mux.Handle(p, proxy)
+				mux.Handle(p+"/", proxy)
+			}
+		}
 	}
 
 	// هر مسیر دیگری (شامل ریشه‌ی "/") به پنل مدیریت خودِ همین برنامه می‌رود —
@@ -6287,7 +6979,22 @@ func buildProxyMux(services []DockerService) *http.ServeMux {
 // صدا زده شود.
 func rebuildProxyRoutes() {
 	state := readStateOrDefault()
-	currentProxyMux.Store(buildProxyMux(state.DockerServices))
+	services := state.Services
+
+	// Add singbox API automatically
+	if clashAddr, err := getClashAPIAddr(); err == nil {
+		parts := strings.Split(clashAddr, ":")
+		if len(parts) == 2 {
+			if port, err := strconv.Atoi(parts[1]); err == nil {
+				services = append(services, ServiceDef{
+					Name:       "singbox",
+					ListenPort: port,
+				})
+			}
+		}
+	}
+
+	currentProxyMux.Store(buildProxyMux(services))
 }
 
 func proxyRouterHandler(w http.ResponseWriter, r *http.Request) {
@@ -6325,7 +7032,6 @@ func startReverseProxyServer() {
 // proxy محلی (بالا) سرو می‌شوند. اینها مستقل از جدول Services (پروکسی‌های
 // sing-box) هستند.
 // ---------------------------------------------------------------------
-var dockerServiceNameRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 
 // reservedServiceNames نام‌هایی هستند که نمی‌توان به‌عنوان DockerService ثبت
 // کرد چون با مسیرهای خودِ پنل مدیریت روی reverse proxy تداخل پیدا می‌کنند.
@@ -6333,82 +7039,7 @@ var reservedServiceNames = map[string]bool{
 	"api": true, "admin": true, "static": true, "assets": true, "favicon.ico": true,
 }
 
-func dockerServicesHandler(w http.ResponseWriter, r *http.Request) {
-	state := readStateOrDefault()
-	if state.DockerServices == nil {
-		state.DockerServices = []DockerService{}
-	}
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"services": state.DockerServices})
-}
-
-func addDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
-	var req DockerService
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
-		return
-	}
-	req.Name = strings.ToLower(strings.TrimSpace(req.Name))
-	if !dockerServiceNameRe.MatchString(req.Name) {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Name must be 1-32 lowercase letters/digits/hyphens (used as a path prefix)"})
-		return
-	}
-	if reservedServiceNames[req.Name] {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is a reserved name and cannot be used for a service", req.Name)})
-		return
-	}
-	if req.Port < 1 || req.Port > 65535 {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid port (1-65535)"})
-		return
-	}
-
-	state := readStateOrDefault()
-	for _, s := range state.DockerServices {
-		if s.Name == req.Name {
-			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("A docker service named %q already exists", req.Name)})
-			return
-		}
-	}
-	state.DockerServices = append(state.DockerServices, req)
-	if err := writeState(state); err != nil {
-		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
-		return
-	}
-	rebuildProxyRoutes()
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q added", req.Name)})
-}
-
-func deleteDockerServiceHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
-		return
-	}
-	name := strings.ToLower(strings.TrimSpace(req.Name))
-
-	state := readStateOrDefault()
-	kept := state.DockerServices[:0]
-	found := false
-	for _, s := range state.DockerServices {
-		if s.Name == name {
-			found = true
-			continue
-		}
-		kept = append(kept, s)
-	}
-	if !found {
-		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Docker service %q not found", name)})
-		return
-	}
-	state.DockerServices = kept
-	if err := writeState(state); err != nil {
-		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
-		return
-	}
-	rebuildProxyRoutes()
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Docker service %q removed", name)})
-}
+// Old docker web apps handlers removed to merge into Services.
 
 // settingsHandler وضعیت کلی تنظیمات قابل‌مدیریت از UI را برمی‌گرداند.
 func settingsHandler(w http.ResponseWriter, r *http.Request) {
@@ -6498,10 +7129,12 @@ func envSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	state := readStateOrDefault()
 	out := make(map[string]interface{}, len(managedEnvKeys))
 	for _, key := range managedEnvKeys {
-		effective := getSetting(key, "")
+		defaultVal := managedEnvDefaults[key]
+		effective := getSetting(key, defaultVal)
 		_, overridden := state.EnvOverrides[key]
 		out[key] = map[string]interface{}{
 			"value":             effective,
+			"default_value":     defaultVal,
 			"overridden_by_ui":  overridden,
 			"requires_restart":  envKeysRequiringRestart[key],
 			"env_value_present": strings.TrimSpace(os.Getenv(key)) != "",
@@ -6745,7 +7378,7 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	configs, err := GenerateWireGuardConfigs(req.Tag, account, warpEndpoints)
+	configs, err := GenerateWireGuardConfigs(req.Tag, account, []string{getGlobalWarpEndpoint()})
 	if err != nil {
 		log.Printf("addWarpHandler: GenerateWireGuardConfigs failed: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Failed to generate configs: " + err.Error()})
@@ -7185,6 +7818,236 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Node %q removed", req.Tag)})
 }
 
+func applyWarpEndpointToNodes(ep string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var nodesRaw []interface{}
+	if err := readJSON(nodesFile, &nodesRaw); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	host, port, _ := parseEndpoint(ep)
+
+	for _, n := range nodesRaw {
+		if m, ok := n.(map[string]interface{}); ok {
+			if t, ok := m["type"].(string); ok && t == "wireguard" {
+				delete(m, "server")
+				delete(m, "server_port")
+
+				if peers, ok := m["peers"].([]interface{}); ok && len(peers) > 0 {
+					if peerMap, ok := peers[0].(map[string]interface{}); ok {
+						peerMap["address"] = host
+						peerMap["port"] = port
+					}
+				}
+			}
+		}
+	}
+
+	b, _ := json.MarshalIndent(nodesRaw, "", "  ")
+	_ = atomicWriteFile(nodesFile, b, 0644)
+
+	// Apply change to sing-box
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		return err
+	}
+	return applyChangeFromStruct(tmpl, nodesRaw)
+}
+
+func getWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"endpoint": getGlobalWarpEndpoint(),
+	})
+}
+
+func pingCurrentWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	ep := getGlobalWarpEndpoint()
+	results, _, err := scanBatchWarpEndpoints(1, []string{}, "both")
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	var curItem *WarpScanItem
+	for _, res := range results {
+		if res.Endpoint == ep {
+			curItem = &res
+			break
+		}
+	}
+
+	if curItem == nil {
+		mu.Lock()
+		var nodes []map[string]interface{}
+		_ = readJSON(nodesFile, &nodes)
+		mu.Unlock()
+
+		var sampleWarp map[string]interface{}
+		for _, n := range nodes {
+			if t, ok := n["type"].(string); ok && t == "wireguard" {
+				sampleWarp = n
+				break
+			}
+		}
+
+		if sampleWarp != nil {
+			host, port, _ := parseEndpoint(ep)
+			peer := map[string]interface{}{"address": host, "port": port}
+			if peers, ok := sampleWarp["peers"].([]interface{}); ok && len(peers) > 0 {
+				if p, ok := peers[0].(map[string]interface{}); ok {
+					if val, ok := p["public_key"]; ok { peer["public_key"] = val }
+					if val, ok := p["allowed_ips"]; ok { peer["allowed_ips"] = val }
+					if val, ok := p["reserved"]; ok { peer["reserved"] = val }
+				}
+			}
+			ob := map[string]interface{}{
+				"type": "wireguard", "tag": "WARP_CUR_TEST", "peers": []interface{}{peer},
+			}
+			if val, ok := sampleWarp["address"]; ok { ob["address"] = val }
+			if val, ok := sampleWarp["private_key"]; ok { ob["private_key"] = val }
+			if val, ok := sampleWarp["mtu"]; ok { ob["mtu"] = val }
+
+			cfg := map[string]interface{}{
+				"endpoints": []interface{}{ob},
+				"outbounds": []map[string]interface{}{
+					{"type": "urltest", "tag": "test_urltest", "outbounds": []string{"WARP_CUR_TEST"}, "url": "http://cp.cloudflare.com/generate_204", "interval": "3m"},
+				},
+				"experimental": map[string]interface{}{
+					"clash_api": map[string]interface{}{"external_controller": "127.0.0.1:9096"},
+				},
+			}
+			tmpFile := filepath.Join(filepath.Dir(nodesFile), "temp_warp_cur_ping.json")
+			b, _ := json.MarshalIndent(cfg, "", "  ")
+			_ = os.WriteFile(tmpFile, b, 0644)
+			defer os.Remove(tmpFile)
+
+			singboxBin, _ := findSingBox()
+			if singboxBin != "" {
+				cmd := exec.Command(singboxBin, "run", "-c", tmpFile)
+				if err := cmd.Start(); err == nil {
+					defer func() {
+						if cmd.Process != nil { cmd.Process.Kill() }
+					}()
+					time.Sleep(2 * time.Second)
+					testReqURL := "http://127.0.0.1:9096/proxies/test_urltest/delay?timeout=3000&url=http://cp.cloudflare.com/generate_204"
+					if testResp, err := http.Get(testReqURL); err == nil { testResp.Body.Close() }
+					if resp, err := http.Get("http://127.0.0.1:9096/proxies"); err == nil {
+						var apiResp struct {
+							Proxies map[string]struct {
+								History []struct { Delay int `json:"delay"` } `json:"history"`
+							} `json:"proxies"`
+						}
+						_ = json.NewDecoder(resp.Body).Decode(&apiResp)
+						resp.Body.Close()
+						if p, ok := apiResp.Proxies["WARP_CUR_TEST"]; ok && len(p.History) > 0 {
+							if p.History[len(p.History)-1].Delay > 0 {
+								curItem = &WarpScanItem{
+									Endpoint: ep,
+									Delay: p.History[len(p.History)-1].Delay,
+									IsDefault: ep == "engage.cloudflareclient.com:2408",
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	delay := -1
+	if curItem != nil {
+		delay = curItem.Delay
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"endpoint": ep,
+		"delay":    delay,
+	})
+}
+
+func getWarpBackupsHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	currentEP := getGlobalWarpEndpoint()
+
+	seen := make(map[string]bool)
+	var list []string
+
+	addEP := func(ep string) {
+		if ep != "" && !seen[ep] {
+			seen[ep] = true
+			list = append(list, ep)
+		}
+	}
+
+	addEP("engage.cloudflareclient.com:2408")
+	addEP(currentEP)
+	for _, b := range state.BackupWarpEndpoints {
+		addEP(b)
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"current": currentEP,
+		"backups": list,
+	})
+}
+
+// testWarpBackupsHandler pings the backups and returns delays
+func testWarpBackupsHandler(w http.ResponseWriter, r *http.Request) {
+	results, _, err := scanBatchWarpEndpoints(0, []string{}, "both")
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"results": results,
+	})
+}
+
+// scanWarpBatchHandler handles batch scanning request
+
+func applyWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Endpoint) == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid endpoint"})
+		return
+	}
+
+	ep := strings.TrimSpace(req.Endpoint)
+	state := readStateOrDefault()
+	state.GlobalWarpEndpoint = ep
+	_ = writeState(state)
+
+	if err := applyWarpEndpointToNodes(ep); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to apply endpoint: " + err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"message":  "Applied global WARP endpoint: " + ep,
+		"endpoint": ep,
+	})
+}
+
+func resetWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	state.GlobalWarpEndpoint = ""
+	_ = writeState(state)
+
+	ep := getGlobalWarpEndpoint()
+	if err := applyWarpEndpointToNodes(ep); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to apply default endpoint: " + err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"message":  "Reset to default WARP endpoint",
+		"endpoint": ep,
+	})
+}
 // ---------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------
@@ -8313,7 +9176,6 @@ func main() {
 	ensureDefaultFiles()
 	autoDownloadSingBoxIfMissing()
 	startBackupScheduler()
-	startReverseProxyServer()
 
 	if getAdminToken() == "" {
 		log.Println("⚠️  ADMIN_TOKEN تنظیم نشده — API مدیریت بدون احراز هویت است. چون پنل حالا از طریق reverse proxy عمومی (پورت " + proxyPort + ") هم در دسترس است، این را قبل از فعال‌کردن هر تونلی از صفحه‌ی Settings یا با export ADMIN_TOKEN=... ست کنید.")
@@ -8373,9 +9235,7 @@ func main() {
 	http.HandleFunc("/api/singbox/start", requireAuth(requireMethod(http.MethodPost, singboxStartHandler)))
 	http.HandleFunc("/api/singbox/stop", requireAuth(requireMethod(http.MethodPost, singboxStopHandler)))
 	http.HandleFunc("/api/singbox/restart", requireAuth(requireMethod(http.MethodPost, singboxRestartHandler)))
-	http.HandleFunc("/api/docker_services", requireAuth(requireMethod(http.MethodGet, dockerServicesHandler)))
-	http.HandleFunc("/api/add_docker_service", requireAuth(requireMethod(http.MethodPost, addDockerServiceHandler)))
-	http.HandleFunc("/api/delete_docker_service", requireAuth(requireMethod(http.MethodPost, deleteDockerServiceHandler)))
+	// Docker service endpoints removed
 	http.HandleFunc("/api/subscriptions", requireAuth(requireMethod(http.MethodGet, listSubscriptionsHandler)))
 	http.HandleFunc("/api/add_subscription", requireAuth(requireMethod(http.MethodPost, addSubscriptionHandler)))
 	http.HandleFunc("/api/edit_subscription", requireAuth(requireMethod(http.MethodPost, editSubscriptionHandler)))
@@ -8391,6 +9251,13 @@ func main() {
 	http.HandleFunc("/api/delete_warp_group", requireAuth(requireMethod(http.MethodPost, deleteWarpGroupHandler)))
 	http.HandleFunc("/api/edit_warp_group", requireAuth(requireMethod(http.MethodPost, editWarpGroupHandler)))
 	http.HandleFunc("/api/delete_warp_node", requireAuth(requireMethod(http.MethodPost, deleteWarpNodeHandler)))
+	http.HandleFunc("/api/warp/endpoint", requireAuth(requireMethod(http.MethodGet, getWarpEndpointHandler)))
+	http.HandleFunc("/api/warp/endpoint/ping_current", requireAuth(requireMethod(http.MethodPost, pingCurrentWarpEndpointHandler)))
+	http.HandleFunc("/api/warp/endpoint/backups", requireAuth(requireMethod(http.MethodGet, getWarpBackupsHandler)))
+	http.HandleFunc("/api/warp/endpoint/test_backups", requireAuth(requireMethod(http.MethodPost, testWarpBackupsHandler)))
+	http.HandleFunc("/api/warp/endpoint/scan_batch", requireAuth(requireMethod(http.MethodPost, scanWarpBatchHandler)))
+	http.HandleFunc("/api/warp/endpoint/apply", requireAuth(requireMethod(http.MethodPost, applyWarpEndpointHandler)))
+	http.HandleFunc("/api/warp/endpoint/reset", requireAuth(requireMethod(http.MethodPost, resetWarpEndpointHandler)))
 	http.HandleFunc("/api/backup/settings", requireAuth(settingsMethodRouter(backupSettingsHandler, updateBackupSettingsHandler)))
 	http.HandleFunc("/api/backup/run", requireAuth(requireMethod(http.MethodPost, backupRunHandler)))
 	http.HandleFunc("/api/backup/restore", requireAuth(requireMethod(http.MethodPost, backupRestoreHandler)))
@@ -8401,9 +9268,16 @@ func main() {
 	go func() {
 		log.Printf("🚀 Manager running on http://%s%s", bindAddr, apiPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			log.Printf("Server failed: %v", err)
+			singBoxCmdMu.Lock()
+			stopProcess(runningSingBox)
+			runningSingBox = nil
+			singBoxCmdMu.Unlock()
+			os.Exit(1)
 		}
 	}()
+
+	startReverseProxyServer()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
@@ -8423,4 +9297,327 @@ func main() {
 	singBoxCmdMu.Unlock()
 
 	log.Println("Goodbye.")
+}
+
+type WarpScanItem struct {
+	Endpoint  string `json:"endpoint"`
+	Delay     int    `json:"delay"`
+	IsDefault bool   `json:"is_default"`
+	IsBackup  bool   `json:"is_backup"`
+}
+
+func isIPv6Endpoint(ep string) bool {
+	return strings.Contains(ep, "[") || strings.Count(ep, ":") > 1
+}
+
+func generateBatchWarpCandidates(count int, excluded map[string]bool, ipType string) ([]string, map[string]bool) {
+	state := readStateOrDefault()
+
+	backupsMap := make(map[string]bool)
+	for _, b := range state.BackupWarpEndpoints {
+		backupsMap[b] = true
+	}
+
+	var candidates []string
+	seen := make(map[string]bool)
+
+	addCandidate := func(ep string) {
+		if ep == "" || excluded[ep] || seen[ep] {
+			return
+		}
+		isV6 := isIPv6Endpoint(ep)
+		if ipType == "ipv4" && isV6 {
+			return
+		}
+		if ipType == "ipv6" && !isV6 {
+			return
+		}
+		seen[ep] = true
+		candidates = append(candidates, ep)
+	}
+
+	// 1. Default reference
+	defaultEP := "engage.cloudflareclient.com:2408"
+	addCandidate(defaultEP)
+
+	// 2. Saved Backup Endpoints (Highest priority)
+	for _, b := range state.BackupWarpEndpoints {
+		addCandidate(b)
+	}
+
+	// 3. Known working Cloudflare WARP IPs
+	defaults := []string{
+		"162.159.192.1:2408",
+		"162.159.193.3:2408",
+		"162.159.195.1:2408",
+		"162.159.192.1:1701",
+		"162.159.193.3:1701",
+		"162.159.195.1:1701",
+		"162.159.192.1:500",
+		"162.159.193.3:500",
+		"162.159.195.1:500",
+		"188.114.96.1:2408",
+		"188.114.97.1:2408",
+	}
+	for _, ep := range defaults {
+		addCandidate(ep)
+	}
+
+	// 4. Fill up to `count` with random Cloudflare IPs
+	ports := []int{
+		500, 854, 859, 864, 878, 880, 890, 891, 894, 903,
+		908, 928, 934, 939, 942, 943, 945, 946, 955, 968,
+		987, 988, 1002, 1010, 1014, 1018, 1070, 1074, 1180, 1387,
+		1701, 1843, 2371, 2408, 2506, 3138, 3476, 3581, 3854, 4177,
+		4198, 4233, 4500, 5279, 5956, 7103, 7152, 7156, 7281, 7559, 8319, 8742, 8854, 8886,
+	}
+
+	ipv4Prefixes := []string{
+		"188.114.96.", "188.114.97.", "188.114.98.", "188.114.99.",
+		"162.159.192.", "162.159.193.", "162.159.195.", "8.34.146.",
+		"8.39.214.", "8.39.204.", "8.6.112.", "8.35.211.", "8.39.125.",
+		"8.47.69.",
+	}
+
+	ipv6Prefixes := []string{
+		"2606:4700:d0::", "2606:4700:d1::",
+	}
+
+	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+
+	maxAttempts := count * 50
+	if maxAttempts < 1000 {
+		maxAttempts = 1000
+	}
+	attempts := 0
+	for len(candidates) < count && attempts < maxAttempts {
+		attempts++
+		var ep string
+		makeV6 := false
+		if ipType == "ipv6" {
+			makeV6 = true
+		} else if ipType == "both" {
+			makeV6 = (r.Intn(2) == 1)
+		}
+
+		if makeV6 {
+			prefix := ipv6Prefixes[r.Intn(len(ipv6Prefixes))]
+			ip := fmt.Sprintf("[%s%x:%x:%x:%x]", prefix,
+				r.Intn(65536), r.Intn(65536),
+				r.Intn(65536), r.Intn(65536))
+			ep = fmt.Sprintf("%s:%d", ip, ports[r.Intn(len(ports))])
+		} else {
+			prefix := ipv4Prefixes[r.Intn(len(ipv4Prefixes))]
+			ip := fmt.Sprintf("%s%d", prefix, r.Intn(256))
+			ep = fmt.Sprintf("%s:%d", ip, ports[r.Intn(len(ports))])
+		}
+		addCandidate(ep)
+	}
+
+	return candidates, backupsMap
+}
+
+func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType string) ([]WarpScanItem, int, error) {
+	mu.Lock()
+	var nodes []map[string]interface{}
+	_ = readJSON(nodesFile, &nodes)
+	mu.Unlock()
+
+	var sampleWarp map[string]interface{}
+	for _, n := range nodes {
+		if t, ok := n["type"].(string); ok && t == "wireguard" {
+			sampleWarp = n
+			break
+		}
+	}
+
+	if sampleWarp == nil {
+		return nil, 0, fmt.Errorf("no existing WARP node found to extract account details for testing")
+	}
+
+	excludedMap := make(map[string]bool)
+	for _, ep := range excludedEndpoints {
+		excludedMap[ep] = true
+	}
+
+	endpoints, backupsMap := generateBatchWarpCandidates(batchSize, excludedMap, ipType)
+	if len(endpoints) == 0 {
+		return []WarpScanItem{}, 0, nil
+	}
+
+	var endpointNodes []map[string]interface{}
+	var outboundTags []string
+
+	var peerTemplate map[string]interface{}
+	if peers, ok := sampleWarp["peers"].([]interface{}); ok && len(peers) > 0 {
+		if p, ok := peers[0].(map[string]interface{}); ok {
+			peerTemplate = p
+		}
+	}
+
+	for i, ep := range endpoints {
+		tag := fmt.Sprintf("WARP_TEST_%d", i)
+		outboundTags = append(outboundTags, tag)
+
+		host, port, _ := parseEndpoint(ep)
+
+		peer := map[string]interface{}{
+			"address": host,
+			"port":    port,
+		}
+		if peerTemplate != nil {
+			if val, ok := peerTemplate["public_key"]; ok { peer["public_key"] = val }
+			if val, ok := peerTemplate["allowed_ips"]; ok { peer["allowed_ips"] = val }
+			if val, ok := peerTemplate["reserved"]; ok { peer["reserved"] = val }
+		}
+
+		ob := map[string]interface{}{
+			"type":  "wireguard",
+			"tag":   tag,
+			"peers": []interface{}{peer},
+		}
+
+		if val, ok := sampleWarp["address"]; ok { ob["address"] = val }
+		if val, ok := sampleWarp["private_key"]; ok { ob["private_key"] = val }
+		if val, ok := sampleWarp["mtu"]; ok { ob["mtu"] = val }
+
+		endpointNodes = append(endpointNodes, ob)
+	}
+
+	// Add urltest outbound
+	outbounds := []map[string]interface{}{
+		{
+			"type":      "urltest",
+			"tag":       "test_urltest",
+			"outbounds": outboundTags,
+			"url":       "http://cp.cloudflare.com/generate_204",
+			"interval":  "3m",
+		},
+	}
+	apiPort := 9095
+	cfg := map[string]interface{}{
+		"endpoints": endpointNodes,
+		"outbounds": outbounds,
+		"experimental": map[string]interface{}{
+			"clash_api": map[string]interface{}{
+				"external_controller": fmt.Sprintf("127.0.0.1:%d", apiPort),
+			},
+		},
+	}
+
+	tmpFile := filepath.Join(filepath.Dir(nodesFile), "temp_warp_scan.json")
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(tmpFile, b, 0644)
+	defer os.Remove(tmpFile)
+
+	singboxBin, _ := findSingBox()
+	if singboxBin == "" {
+		return nil, 0, fmt.Errorf("sing-box binary not found")
+	}
+	cmd := exec.Command(singboxBin, "run", "-c", tmpFile)
+	if err := cmd.Start(); err != nil {
+		return nil, 0, fmt.Errorf("failed to start temporary sing-box for scanning: %w", err)
+	}
+
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
+
+	// Trigger delay test
+	testReqURL := fmt.Sprintf("http://127.0.0.1:%d/proxies/test_urltest/delay?timeout=3000&url=http://cp.cloudflare.com/generate_204", apiPort)
+	if testResp, err := http.Get(testReqURL); err == nil {
+		testResp.Body.Close()
+	}
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/proxies", apiPort))
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to reach temporary clash api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Proxies map[string]struct {
+			Now     string `json:"now"`
+			All     []string `json:"all"`
+			History []struct {
+				Time  string `json:"time"`
+				Delay int    `json:"delay"`
+			} `json:"history"`
+		} `json:"proxies"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, 0, fmt.Errorf("failed to decode proxies api response: %w", err)
+	}
+
+	var validResults []WarpScanItem
+	state := readStateOrDefault()
+	backupChanged := false
+	existingBackups := make(map[string]bool)
+	for _, b := range state.BackupWarpEndpoints {
+		existingBackups[b] = true
+	}
+
+	for i, ep := range endpoints {
+		tag := fmt.Sprintf("WARP_TEST_%d", i)
+		if p, ok := apiResp.Proxies[tag]; ok && len(p.History) > 0 {
+			lastH := p.History[len(p.History)-1]
+			if lastH.Delay > 0 {
+				validResults = append(validResults, WarpScanItem{
+					Endpoint:  ep,
+					Delay:     lastH.Delay,
+					IsDefault: ep == "engage.cloudflareclient.com:2408",
+					IsBackup:  backupsMap[ep],
+				})
+
+				// Save as backup if not already present
+				if !existingBackups[ep] && ep != "engage.cloudflareclient.com:2408" {
+					state.BackupWarpEndpoints = append(state.BackupWarpEndpoints, ep)
+					existingBackups[ep] = true
+					backupChanged = true
+				}
+			}
+		}
+	}
+
+	if backupChanged {
+		_ = writeState(state)
+	}
+
+	// Sort valid results by delay ascending
+	sort.Slice(validResults, func(i, j int) bool {
+		return validResults[i].Delay < validResults[j].Delay
+	})
+
+	return validResults, len(endpoints), nil
+}
+
+func scanWarpBatchHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BatchSize int      `json:"batch_size"`
+		Excluded  []string `json:"excluded"`
+		IPType    string   `json:"ip_type"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.BatchSize <= 0 {
+		req.BatchSize = 25
+	}
+	if req.IPType == "" {
+		req.IPType = "both"
+	}
+
+	results, testedCount, err := scanBatchWarpEndpoints(req.BatchSize, req.Excluded, req.IPType)
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"valid_results": results,
+		"tested_count":  testedCount,
+	})
 }
