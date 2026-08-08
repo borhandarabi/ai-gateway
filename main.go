@@ -18,6 +18,7 @@ import (
 	"log"
 	"math/big"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"gopkg.in/yaml.v3"
 )
 
 // ---------------------------------------------------------------------
@@ -46,6 +48,12 @@ var (
 	nodesFile    = getEnvDefault("NODES_FILE", "nodes.json")
 	configFile   = getEnvDefault("CONFIG_FILE", "config.json")
 	stateFile    = getEnvDefault("STATE_FILE", "state.json") // متادیتای داخلی خود مدیر (نه چیزی که sing-box می‌خواند)
+
+	// subscriptionsDir دایرکتوری‌ای است که در آن، خروجی پارس‌شده‌ی هر subscription
+	// (فایل جدا، فقط {"outbounds":[...]}) نگه‌داری می‌شود — هرگز داخل template.json
+	// دستی نمی‌رود؛ renderConfig آن‌ها را در زمان ساخت config.json مرج می‌کند
+	// (به بخش "Subscriptions" مراجعه کنید).
+	subscriptionsDir = getEnvDefault("SUBSCRIPTIONS_DIR", "subscriptions")
 )
 
 const (
@@ -805,6 +813,39 @@ const htmlContent = `<!DOCTYPE html>
         </div>
 
         <div class="panel">
+          <div class="panel-head"><h2>Subscriptions</h2></div>
+          <p class="sub">Import proxy nodes from a remote subscription URL or pasted content — sing-box JSON, Clash JSON/YAML, vmess/vless/trojan/ss/hysteria2 URI lines, plain <span class="mono">IP:PORT</span> lines, or base64-wrapped versions of any of these. Each subscription gets its own selectable group (<span class="mono">&lt;name&gt;-auto</span>) on every service — nodes are cached in their own file, never inlined into the hand-edited template.</p>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field">
+              <label for="subName">Name</label>
+              <input type="text" id="subName" placeholder="e.g. myprovider">
+            </div>
+            <div class="field">
+              <label for="subSourceType">Source</label>
+              <select id="subSourceType" onchange="toggleSubscriptionSourceFields()">
+                <option value="remote">Remote URL</option>
+                <option value="local">Paste content</option>
+              </select>
+            </div>
+          </div>
+          <div class="field" id="subUrlField" style="margin-top:8px;">
+            <label for="subUrl">Subscription URL</label>
+            <input type="text" id="subUrl" placeholder="https://provider.example.com/sub?token=...">
+          </div>
+          <div class="field" id="subContentField" style="margin-top:8px;display:none;">
+            <label for="subContent">Subscription content</label>
+            <textarea id="subContent" rows="6" placeholder="Paste sing-box JSON, Clash YAML, vmess://... lines, etc."></textarea>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <button class="btn btn-primary" onclick="addSubscription()">Add &amp; fetch</button>
+          </div>
+          <table class="data" style="margin-top:14px;">
+            <thead><tr><th>Name</th><th>Source</th><th>Nodes</th><th>Last fetched</th><th>Status</th><th></th></tr></thead>
+            <tbody id="subscriptionsBody"><tr class="empty-row"><td colspan="6">No subscriptions added yet.</td></tr></tbody>
+          </table>
+        </div>
+
+        <div class="panel">
           <div class="panel-head"><h2>Docker web apps</h2></div>
           <p class="sub">Each entry is reachable at <span class="mono">&lt;this panel's public URL&gt;/&lt;name&gt;/...</span> through the built-in reverse proxy — no per-service tunnel setup, no manual ingress, works the same in every Cloudflare mode (Full API Token, Tunnel Token, or Quick Tunnel).</p>
           <div class="row" style="align-items:flex-end;">
@@ -1074,7 +1115,7 @@ const htmlContent = `<!DOCTYPE html>
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
     if (name === 'raw') ensureRawEditors();
-    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadEnvSettings(); loadBackupSettings(); }
+    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadDockerServices(); loadSubscriptions(); loadEnvSettings(); loadBackupSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
   };
   window.toggleSidebar = function(){
@@ -1884,6 +1925,106 @@ const htmlContent = `<!DOCTYPE html>
   };
 
   // -----------------------------------------------------------------
+  // Subscriptions: import proxy nodes from a remote URL or pasted content.
+  // Refresh is manual-only (no background scheduler) — the person clicks
+  // "Add & fetch" or the per-row Refresh button.
+  // -----------------------------------------------------------------
+  window.toggleSubscriptionSourceFields = function(){
+    var isRemote = document.getElementById('subSourceType').value === 'remote';
+    document.getElementById('subUrlField').style.display = isRemote ? '' : 'none';
+    document.getElementById('subContentField').style.display = isRemote ? 'none' : '';
+  };
+
+  function subscriptionStatusText(s){
+    if (s.last_error) return s.last_error;
+    if (!s.last_fetched) return 'Not fetched yet';
+    return 'OK';
+  }
+
+  async function loadSubscriptions(){
+    try {
+      var res = await fetch('/api/subscriptions');
+      var data = await res.json();
+      var body = document.getElementById('subscriptionsBody');
+      if (!body) return;
+      var subs = data.subscriptions || [];
+      if (!subs.length){
+        body.innerHTML = '<tr class="empty-row"><td colspan="6">No subscriptions added yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = '';
+      subs.forEach(function(s){
+        var tr = document.createElement('tr');
+        var tdName = document.createElement('td'); tdName.textContent = s.name + (s.enabled ? '' : ' (disabled)');
+        var tdSrc = document.createElement('td'); tdSrc.textContent = s.source_type;
+        var tdCount = document.createElement('td'); tdCount.textContent = s.node_count || 0;
+        var tdFetched = document.createElement('td'); tdFetched.textContent = s.last_fetched ? new Date(s.last_fetched).toLocaleString() : '—';
+        var tdStatus = document.createElement('td'); tdStatus.textContent = subscriptionStatusText(s);
+        if (s.last_error) tdStatus.style.color = 'var(--danger)';
+        var tdAct = document.createElement('td');
+        var refreshBtn = document.createElement('button');
+        refreshBtn.className = 'btn btn-ghost btn-sm';
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.onclick = function(){
+          refreshBtn.disabled = true;
+          api('/api/refresh_subscription', { name: s.name }).then(function(data){
+            showMessage(data.message || 'Refreshed', 'success');
+            loadSubscriptions();
+          }).catch(function(err){
+            showMessage(err.message, 'danger');
+            loadSubscriptions();
+          }).finally(function(){ refreshBtn.disabled = false; });
+        };
+        var toggleBtn = document.createElement('button');
+        toggleBtn.className = 'btn btn-ghost btn-sm';
+        toggleBtn.textContent = s.enabled ? 'Disable' : 'Enable';
+        toggleBtn.onclick = function(){
+          api('/api/edit_subscription', { name: s.name, enabled: !s.enabled }).then(function(data){
+            showMessage(data.message || 'Updated', 'success');
+            loadSubscriptions();
+          }).catch(function(err){ showMessage(err.message, 'danger'); });
+        };
+        var delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-danger btn-sm';
+        delBtn.textContent = 'Delete';
+        delBtn.onclick = function(){
+          askConfirm('Remove ' + s.name + '?', 'This removes its ' + (s.node_count || 0) + ' cached node(s) and its group from every service.', function(){
+            api('/api/delete_subscription', { name: s.name }).then(function(data){
+              showMessage(data.message || 'Removed', 'success');
+              loadSubscriptions();
+            }).catch(function(err){ showMessage(err.message, 'danger'); });
+          });
+        };
+        tdAct.appendChild(refreshBtn); tdAct.appendChild(toggleBtn); tdAct.appendChild(delBtn);
+        tr.appendChild(tdName); tr.appendChild(tdSrc); tr.appendChild(tdCount); tr.appendChild(tdFetched); tr.appendChild(tdStatus); tr.appendChild(tdAct);
+        body.appendChild(tr);
+      });
+    } catch (err){
+      showMessage('Failed to load subscriptions: ' + err.message, 'danger');
+    }
+  }
+  window.loadSubscriptions = loadSubscriptions;
+
+  window.addSubscription = function(){
+    var name = document.getElementById('subName').value.trim();
+    var sourceType = document.getElementById('subSourceType').value;
+    var url = document.getElementById('subUrl').value.trim();
+    var content = document.getElementById('subContent').value;
+    if (!name){ showMessage('Name is required', 'danger'); return; }
+    if (sourceType === 'remote' && !url){ showMessage('Subscription URL is required', 'danger'); return; }
+    if (sourceType === 'local' && !content.trim()){ showMessage('Subscription content is required', 'danger'); return; }
+    api('/api/add_subscription', { name: name, source_type: sourceType, url: url, content: content }).then(function(data){
+      showMessage(data.message || 'Added', 'success');
+      document.getElementById('subName').value = '';
+      document.getElementById('subUrl').value = '';
+      document.getElementById('subContent').value = '';
+      loadSubscriptions();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  // -----------------------------------------------------------------
   // Dashboard (metacubexd): self-hosted via sing-box external_ui first,
   // falls back to the public metacubexd.pages.dev build if unreachable.
   // -----------------------------------------------------------------
@@ -2200,6 +2341,26 @@ type DockerService struct {
 	Port int    `json:"port"` // پورتی که کانتینر روی 127.0.0.1 منتشر کرده، مثل 3000
 }
 
+// Subscription یک منبع subscription پراکسی است: یک URL که به‌صورت دوره‌ای/دستی
+// fetch می‌شود، یا محتوایی که مستقیم در UI/API پیست شده. خروجی پارس‌شده (لیست
+// outbound به شکل sing-box) هرگز اینجا یا در template.json ذخیره نمی‌شود — در
+// فایل جدای subscriptionsDir/<Name>.json نگه‌داری می‌شود (رجوع کنید به
+// refreshSubscription/renderConfig) تا template.json دستی کوچک و تمیز بماند.
+type Subscription struct {
+	Name string `json:"name"` // شناسه‌ی یکتا؛ هم برای نام‌گذاری گروه (Name-auto) و هم پیشوند تگ (Name/tag) استفاده می‌شود
+	// SourceType: "remote" (Content نادیده گرفته می‌شود، URL هر بار fetch می‌شود)
+	// یا "local" (URL نادیده گرفته می‌شود، محتوای پیست‌شده در Content ذخیره است).
+	SourceType string `json:"source_type"`
+	URL        string `json:"url,omitempty"`
+	Content    string `json:"content,omitempty"`
+	Enabled    bool   `json:"enabled"`
+
+	// وضعیت آخرین رفرش — فقط برای نمایش در UI، توسط refreshSubscription پر می‌شود.
+	NodeCount   int    `json:"node_count"`
+	LastFetched string `json:"last_fetched,omitempty"` // RFC3339
+	LastError   string `json:"last_error,omitempty"`
+}
+
 // CloudflareConfig تنظیمات تونل Cloudflare را نگه می‌دارد. سه حالت پشتیبانی می‌شود:
 //   - api_token: کاربر یک API Token کامل (Tunnel:Edit + DNS:Edit) و یک دامنه‌ی خودش می‌دهد؛
 //     مدیر خودکار تونل را می‌سازد، ingress را بر اساس DockerServices/پنل/داشبورد تنظیم می‌کند
@@ -2230,9 +2391,14 @@ type AppState struct {
 	AdminToken string `json:"admin_token,omitempty"`
 	// Cloudflare تنظیمات تونل (هر سه حالت) را نگه می‌دارد.
 	Cloudflare CloudflareConfig `json:"cloudflare,omitempty"`
-	// DockerServices فهرست وب‌سرویس‌های جدا (zai/grok/deepseek و غیره) برای iframe + تونل.
+	// DockerServices فهرست وب‌سرویس‌های جدا (zai/grok/deepseek و غیره) است — هرکدام
+	// زیر پیشوند مسیر "/" + Name روی reverse proxy محلی سرو می‌شود.
 	DockerServices []DockerService `json:"docker_services,omitempty"`
-	// EnvOverrides مقادیر تنظیمات مبتنی‌بر env که از صفحه‌ی Settings تغییر داده شده‌اند
+	// Subscriptions فهرست منابع subscription (remote URL یا محتوای local پیست‌شده) است.
+	// خروجی پارس‌شده‌ی هر کدام در subscriptionsDir/<name>.json نگه‌داری می‌شود، نه اینجا
+	// (اینجا فقط متادیتا/تنظیمات منبع است).
+	Subscriptions []Subscription `json:"subscriptions,omitempty"`
+	// EnvOverrides مقادیر تنظیمات مبتنی‌بر env که از صفحه‌ی Settings تغییر داده‌شده‌اند
 	// (اولویت با این مقادیر است، سپس متغیر محیطی واقعی، سپس مقدار پیش‌فرض کد).
 	EnvOverrides map[string]string `json:"env_overrides,omitempty"`
 }
@@ -2500,21 +2666,28 @@ func ensureDefaultFiles() {
 
 	if os.IsNotExist(tmplErr) && os.IsNotExist(nodesErr) {
 		bootstrapFreshInstall()
-		return
-	}
-	if os.IsNotExist(tmplErr) {
-		if err := os.WriteFile(templateFile, []byte(minimalDefaultTemplate), 0644); err != nil {
-			log.Printf("Failed to create default template.json: %v", err)
-		} else {
-			log.Printf("Created minimal default template.json (nodes.json already existed)")
+	} else {
+		if os.IsNotExist(tmplErr) {
+			if err := os.WriteFile(templateFile, []byte(minimalDefaultTemplate), 0644); err != nil {
+				log.Printf("Failed to create default template.json: %v", err)
+			} else {
+				log.Printf("Created minimal default template.json (nodes.json already existed)")
+			}
+		}
+		if os.IsNotExist(nodesErr) {
+			if err := os.WriteFile(nodesFile, []byte("[]"), 0644); err != nil {
+				log.Printf("Failed to create default nodes.json: %v", err)
+			} else {
+				log.Printf("Created empty nodes.json (template.json already existed)")
+			}
 		}
 	}
-	if os.IsNotExist(nodesErr) {
-		if err := os.WriteFile(nodesFile, []byte("[]"), 0644); err != nil {
-			log.Printf("Failed to create default nodes.json: %v", err)
-		} else {
-			log.Printf("Created empty nodes.json (template.json already existed)")
-		}
+
+	// subscriptionsDir میزبان فایل‌های کش هر subscription است (بخش "منطق کسب‌وکار
+	// Subscriptions") — هرگز دستی ویرایش نمی‌شود، فقط توسط refreshSubscription نوشته
+	// و توسط renderConfig خوانده می‌شود.
+	if err := os.MkdirAll(subscriptionsDir, 0755); err != nil {
+		log.Printf("Failed to create subscriptions directory %q: %v", subscriptionsDir, err)
 	}
 }
 
@@ -4137,6 +4310,17 @@ func renderConfig(tmpl map[string]interface{}, nodes []interface{}, state AppSta
 		groupAutoOutbounds = append(groupAutoOutbounds, node)
 	}
 
+	// نودهای subscription (بخش "منطق کسب‌وکار Subscriptions") دقیقاً هم‌شکل خروجی
+	// حلقه‌ی بالا (WARP) هستند — به همان چهار متغیر append می‌شوند تا تمام منطق
+	// پایین‌دست (globalAutoMembers، selectorOptions، fallbackDefault) بدون هیچ
+	// تغییری هم برای WARP و هم برای subscriptionها کار کند.
+	subEndpoints, subProxies, subGroupAutoOutbounds, subGroupAutoTags := loadSubscriptionOutbounds(state.Subscriptions, urltestDefaults)
+	wireguardNodes = append(wireguardNodes, subEndpoints...)
+	otherNodes = append(otherNodes, subProxies...)
+	groupAutoOutbounds = append(groupAutoOutbounds, subGroupAutoOutbounds...)
+	groupAutoTags = append(groupAutoTags, subGroupAutoTags...)
+	cfg["endpoints"] = wireguardNodes
+
 	// "auto" سراسری: بین نودهای auto هر گروه انتخاب می‌کند (سریع‌تر از تست تک‌تک
 	// همه‌ی اندپوینت‌های خام)، به‌علاوه‌ی هر اندپوینت گروه‌بندی‌نشده (نودهای دستی).
 	var globalAutoMembers []string
@@ -4161,6 +4345,7 @@ func renderConfig(tmpl map[string]interface{}, nodes []interface{}, state AppSta
 		}
 	}
 	addOpt("auto")
+	addOpt("direct")
 	for _, t := range groupAutoTags {
 		addOpt(t)
 	}
@@ -4318,6 +4503,24 @@ func applyChangeFromStruct(tmpl map[string]interface{}, nodes []interface{}) err
 	nodesRaw, err := json.MarshalIndent(nodes, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal nodes: %w", err)
+	}
+	return applyChangeFromRaw(tmplRaw, nodesRaw)
+}
+
+// applyCurrentTemplateAndNodes رندر/اعتبارسنجی/اعمال کانفیگ را با محتوای فعلیِ
+// روی دیسکِ template.json/nodes.json دوباره اجرا می‌کند، بدون این‌که خودشان را
+// تغییر دهد. برای مواردی مثل add/refresh/delete یک subscription لازم است: آن
+// عملیات‌ها template.json/nodes.json را دست نمی‌زنند، اما renderConfig هم آن دو
+// فایل و هم subscriptionsDir را می‌خواند، پس باید دوباره صدا زده شود تا نودهای
+// تازه‌ی subscription واقعاً به config.json در حال اجرا برسند.
+func applyCurrentTemplateAndNodes() error {
+	tmplRaw, err := os.ReadFile(templateFile)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", templateFile, err)
+	}
+	nodesRaw, err := os.ReadFile(nodesFile)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", nodesFile, err)
 	}
 	return applyChangeFromRaw(tmplRaw, nodesRaw)
 }
@@ -4697,6 +4900,1321 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Service %q updated", req.NewName)})
+}
+
+// ---------------------------------------------------------------------
+// پارسر subscription: تبدیل محتوای remote/local (هر کدام از فرمت‌های sing-box
+// JSON، Clash JSON/YAML، خطوط URI، خطوط ساده‌ی IP:PORT، یا base64 روی هرکدام از
+// این‌ها) به لیستی از outbound به شکل sing-box. الگوی طراحی از GeneralSubscriptionParser
+// کتابخانه‌ی Resin (github.com/Resinat/Resin) گرفته شده؛ خودِ کد اینجا از صفر
+// نوشته شده چون Resin یک گیت‌وی کامل و مستقل است (sing-box را به‌عنوان کتابخانه
+// import می‌کند و SQLite/health-check/sticky-routing خودش را دارد)، نه یک
+// کتابخانه‌ی سبک قابل import — معماری این پروژه (manager دور یک باینری خارجی
+// sing-box) با آن سازگار نیست.
+// ---------------------------------------------------------------------
+
+// subSupportedOutboundTypes: نوع outboundهایی که مستقیم (بدون تبدیل) از یک
+// subscription به شکل sing-box JSON پذیرفته می‌شوند. هر چیز دیگری (selector،
+// urltest، direct، block، dns، یا هر type ناشناخته) نادیده گرفته می‌شود — این‌ها
+// outbound "نود" واقعی نیستند.
+var subSupportedOutboundTypes = map[string]bool{
+	"socks": true, "http": true, "shadowsocks": true, "vmess": true, "trojan": true,
+	"wireguard": true, "hysteria": true, "vless": true, "shadowtls": true, "tuic": true,
+	"hysteria2": true, "anytls": true, "ssh": true,
+}
+
+// subscriptionNameRe نام subscription را محدود می‌کند — چون هم برای نام فایل
+// کش (subscriptionsDir/<name>.json) و هم پیشوند گروه/تگ ("<name>-auto"،
+// "<name>/<tag>") استفاده می‌شود.
+var subscriptionNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+
+// parseGeneralSubscription نقطه‌ی ورود پارسر است: فرمت محتوا را تشخیص می‌دهد و
+// لیست outbound (هرکدام حداقل "type" و "tag" دارد) برمی‌گرداند. نودهایی که تک‌تک
+// پارس‌شان شکست بخورد (نه کل subscription) با یک warning رد می‌شوند — یک خط
+// خراب در subscriptionی با ۵۰۰ نود نباید ۴۹۹ تای دیگر را هم از بین ببرد.
+func parseGeneralSubscription(raw []byte) (outbounds []map[string]interface{}, warnings []string, err error) {
+	content := unwrapBase64IfWrapped(raw)
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return nil, nil, fmt.Errorf("subscription content is empty")
+	}
+
+	if trimmed[0] == '{' {
+		var obj map[string]interface{}
+		if jsonErr := json.Unmarshal(trimmed, &obj); jsonErr == nil {
+			if rawList, ok := obj["outbounds"].([]interface{}); ok {
+				ob, warn := filterSupportedOutbounds(rawList)
+				return ob, warn, nil
+			}
+			if proxies, ok := obj["proxies"].([]interface{}); ok {
+				ob, warn := convertClashProxies(proxies)
+				return ob, warn, nil
+			}
+			return nil, nil, fmt.Errorf("JSON object has neither \"outbounds\" nor \"proxies\"")
+		}
+	}
+	if trimmed[0] == '[' {
+		var arr []interface{}
+		if jsonErr := json.Unmarshal(trimmed, &arr); jsonErr == nil {
+			ob, warn := filterSupportedOutbounds(arr)
+			return ob, warn, nil
+		}
+	}
+
+	if looksLikeYAML(trimmed) {
+		var doc map[string]interface{}
+		if yamlErr := yaml.Unmarshal(trimmed, &doc); yamlErr == nil {
+			if proxies, ok := doc["proxies"].([]interface{}); ok {
+				ob, warn := convertClashProxies(proxies)
+				return ob, warn, nil
+			}
+		}
+	}
+
+	return parseLineBasedSubscription(string(trimmed))
+}
+
+func looksLikeYAML(b []byte) bool {
+	s := string(b)
+	return strings.Contains(s, "\nproxies:") || strings.HasPrefix(s, "proxies:")
+}
+
+var subURISchemes = []string{"vmess", "vless", "trojan", "ss", "hysteria2", "hy2", "http", "https", "socks5", "socks5h"}
+var reIPv4 = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
+
+// unwrapBase64IfWrapped: اگر کل محتوا از قبل شبیه JSON/YAML/خط URI نباشد، چند
+// نوع رمزگشایی base64 را امتحان می‌کند — بسیاری از ارائه‌دهنده‌های subscription
+// کل لیست نود را این‌طور می‌پیچند.
+func unwrapBase64IfWrapped(raw []byte) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw
+	}
+	if trimmed[0] == '{' || trimmed[0] == '[' || looksLikeYAML(trimmed) || looksLikeURILines(trimmed) {
+		return raw
+	}
+	compact := string(bytes.Join(bytes.Fields(trimmed), []byte("")))
+	decoders := []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding}
+	for _, dec := range decoders {
+		if out, decErr := dec.DecodeString(compact); decErr == nil && looksLikeDecodedSubscription(out) {
+			return out
+		}
+	}
+	return raw
+}
+
+func looksLikeURILines(b []byte) bool {
+	for _, scheme := range subURISchemes {
+		if bytes.Contains(b, []byte(scheme+"://")) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeDecodedSubscription(b []byte) bool {
+	t := bytes.TrimSpace(b)
+	if len(t) == 0 {
+		return false
+	}
+	if t[0] == '{' || t[0] == '[' || looksLikeYAML(t) || looksLikeURILines(t) {
+		return true
+	}
+	for _, line := range strings.Split(string(t), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if _, _, _, _, ok := parsePlainHostPortLine(line); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// filterSupportedOutbounds فقط entryهایی را نگه می‌دارد که "type"شان یک نود
+// پراکسی واقعی است (نه "direct"/"block"/"selector"/"urltest"/"dns"/ناشناخته).
+func filterSupportedOutbounds(raw []interface{}) (out []map[string]interface{}, warnings []string) {
+	for i, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("outbound #%d: not a JSON object, skipped", i))
+			continue
+		}
+		t, _ := m["type"].(string)
+		if !subSupportedOutboundTypes[t] {
+			warnings = append(warnings, fmt.Sprintf("outbound #%d: unsupported type %q, skipped", i, t))
+			continue
+		}
+		out = append(out, m)
+	}
+	return
+}
+
+// ---------------------------------------------------------------------
+// تبدیل Clash proxy -> outbound به شکل sing-box
+// ---------------------------------------------------------------------
+
+func convertClashProxies(raw []interface{}) (out []map[string]interface{}, warnings []string) {
+	for i, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("proxy #%d: not an object, skipped", i))
+			continue
+		}
+		ob, convErr := convertClashProxy(m)
+		if convErr != nil {
+			name, _ := m["name"].(string)
+			warnings = append(warnings, fmt.Sprintf("proxy #%d (%s): %v, skipped", i, name, convErr))
+			continue
+		}
+		out = append(out, ob)
+	}
+	return
+}
+
+func csStr(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			return fmt.Sprintf("%v", v)
+		}
+	}
+	return ""
+}
+
+func csBool(m map[string]interface{}, keys ...string) bool {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch t := v.(type) {
+			case bool:
+				return t
+			case string:
+				return t == "true" || t == "1"
+			}
+		}
+	}
+	return false
+}
+
+func csInt(m map[string]interface{}, def int, keys ...string) int {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch t := v.(type) {
+			case int:
+				return t
+			case float64:
+				return int(t)
+			case string:
+				if n, convErr := strconv.Atoi(t); convErr == nil {
+					return n
+				}
+			}
+		}
+	}
+	return def
+}
+
+func csMap(m map[string]interface{}, keys ...string) map[string]interface{} {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if sub, ok2 := v.(map[string]interface{}); ok2 {
+				return sub
+			}
+		}
+	}
+	return nil
+}
+
+func csStrList(m map[string]interface{}, keys ...string) []string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if list, ok2 := v.([]interface{}); ok2 {
+				out := make([]string, 0, len(list))
+				for _, it := range list {
+					out = append(out, fmt.Sprintf("%v", it))
+				}
+				return out
+			}
+			if s, ok2 := v.(string); ok2 && s != "" {
+				return []string{s}
+			}
+		}
+	}
+	return nil
+}
+
+// clashTLSBlock یک شیء "tls" به سبک sing-box از فیلدهای رایج TLS در Clash می‌سازد.
+func clashTLSBlock(m map[string]interface{}, enabled bool, defaultSNI string) map[string]interface{} {
+	sni := csStr(m, "sni", "servername")
+	if sni == "" {
+		sni = defaultSNI
+	}
+	tls := map[string]interface{}{
+		"enabled":     enabled,
+		"server_name": sni,
+		"insecure":    csBool(m, "skip-cert-verify", "allow_insecure", "allowInsecure", "insecure"),
+	}
+	if alpn := csStrList(m, "alpn"); len(alpn) > 0 {
+		tls["alpn"] = alpn
+	}
+	if fp := csStr(m, "client-fingerprint", "fingerprint"); fp != "" {
+		tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": fp}
+	}
+	if ro := csMap(m, "reality-opts"); ro != nil {
+		tls["reality"] = map[string]interface{}{
+			"enabled":    true,
+			"public_key": csStr(ro, "public-key"),
+			"short_id":   csStr(ro, "short-id"),
+		}
+	}
+	return tls
+}
+
+// clashTransportBlock یک شیء "transport" به سبک sing-box از فیلدهای
+// network/ws-opts/grpc-opts/h2-opts/httpupgrade-opts در Clash می‌سازد. برای tcp
+// ساده nil برمی‌گرداند.
+func clashTransportBlock(m map[string]interface{}) map[string]interface{} {
+	network := csStr(m, "network")
+	switch network {
+	case "ws":
+		opts := csMap(m, "ws-opts")
+		t := map[string]interface{}{"type": "ws"}
+		if opts != nil {
+			t["path"] = csStr(opts, "path")
+			if headers := csMap(opts, "headers"); headers != nil {
+				t["headers"] = headers
+			}
+		}
+		return t
+	case "grpc":
+		opts := csMap(m, "grpc-opts")
+		t := map[string]interface{}{"type": "grpc"}
+		if opts != nil {
+			t["service_name"] = csStr(opts, "grpc-service-name")
+		}
+		return t
+	case "h2", "http":
+		opts := csMap(m, "h2-opts")
+		t := map[string]interface{}{"type": "http"}
+		if opts != nil {
+			if hosts := csStrList(opts, "host"); len(hosts) > 0 {
+				t["host"] = hosts
+			}
+			t["path"] = csStr(opts, "path")
+		}
+		return t
+	case "httpupgrade":
+		opts := csMap(m, "httpupgrade-opts")
+		t := map[string]interface{}{"type": "httpupgrade"}
+		if opts != nil {
+			t["host"] = csStr(opts, "host")
+			t["path"] = csStr(opts, "path")
+		}
+		return t
+	}
+	return nil
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func convertClashProxy(m map[string]interface{}) (map[string]interface{}, error) {
+	typ := strings.ToLower(csStr(m, "type"))
+	tag := csStr(m, "name")
+	server := csStr(m, "server")
+	port := csInt(m, 0, "port")
+	if tag == "" {
+		tag = fmt.Sprintf("%s:%d", server, port)
+	}
+	if server == "" || port == 0 {
+		return nil, fmt.Errorf("missing server/port")
+	}
+
+	switch typ {
+	case "ss", "shadowsocks":
+		out := map[string]interface{}{
+			"type": "shadowsocks", "tag": tag, "server": server, "server_port": port,
+			"method": csStr(m, "cipher", "method"), "password": csStr(m, "password"),
+		}
+		if plugin := csStr(m, "plugin"); plugin != "" {
+			out["plugin"] = plugin
+			if po := csMap(m, "plugin-opts"); po != nil {
+				var parts []string
+				for k, v := range po {
+					parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+				}
+				out["plugin_opts"] = strings.Join(parts, ";")
+			}
+		}
+		return out, nil
+
+	case "socks", "socks4", "socks4a", "socks5":
+		return map[string]interface{}{
+			"type": "socks", "tag": tag, "server": server, "server_port": port, "version": "5",
+			"username": csStr(m, "username"), "password": csStr(m, "password"),
+		}, nil
+
+	case "http":
+		out := map[string]interface{}{
+			"type": "http", "tag": tag, "server": server, "server_port": port,
+			"username": csStr(m, "username"), "password": csStr(m, "password"),
+		}
+		if csBool(m, "tls") {
+			out["tls"] = clashTLSBlock(m, true, server)
+		}
+		return out, nil
+
+	case "vmess":
+		out := map[string]interface{}{
+			"type": "vmess", "tag": tag, "server": server, "server_port": port,
+			"uuid": csStr(m, "uuid"), "security": orDefault(csStr(m, "cipher"), "auto"),
+			"alter_id": csInt(m, 0, "alterId", "alter_id"),
+		}
+		if csBool(m, "tls") {
+			out["tls"] = clashTLSBlock(m, true, server)
+		}
+		if tr := clashTransportBlock(m); tr != nil {
+			out["transport"] = tr
+		}
+		return out, nil
+
+	case "vless":
+		out := map[string]interface{}{
+			"type": "vless", "tag": tag, "server": server, "server_port": port,
+			"uuid": csStr(m, "uuid"),
+		}
+		if flow := csStr(m, "flow"); flow != "" {
+			out["flow"] = flow
+		}
+		if csBool(m, "tls") {
+			out["tls"] = clashTLSBlock(m, true, server)
+		}
+		if tr := clashTransportBlock(m); tr != nil {
+			out["transport"] = tr
+		}
+		return out, nil
+
+	case "trojan":
+		out := map[string]interface{}{
+			"type": "trojan", "tag": tag, "server": server, "server_port": port,
+			"password": csStr(m, "password"),
+			"tls":      clashTLSBlock(m, true, server),
+		}
+		if tr := clashTransportBlock(m); tr != nil {
+			out["transport"] = tr
+		}
+		return out, nil
+
+	case "hysteria":
+		out := map[string]interface{}{
+			"type": "hysteria", "tag": tag, "server": server, "server_port": port,
+			"up_mbps": csInt(m, 0, "up", "up_mbps"), "down_mbps": csInt(m, 0, "down", "down_mbps"),
+			"auth_str": csStr(m, "auth_str", "auth-str"),
+			"tls":      clashTLSBlock(m, true, server),
+		}
+		if obfs := csStr(m, "obfs"); obfs != "" {
+			out["obfs"] = obfs
+		}
+		return out, nil
+
+	case "hysteria2", "hy2":
+		out := map[string]interface{}{
+			"type": "hysteria2", "tag": tag, "server": server, "server_port": port,
+			"password": csStr(m, "password", "auth"),
+			"tls":      clashTLSBlock(m, true, server),
+		}
+		if obfs := csStr(m, "obfs"); obfs != "" {
+			out["obfs"] = map[string]interface{}{"type": obfs, "password": csStr(m, "obfs-password")}
+		}
+		return out, nil
+
+	case "tuic":
+		return map[string]interface{}{
+			"type": "tuic", "tag": tag, "server": server, "server_port": port,
+			"uuid": csStr(m, "uuid"), "password": csStr(m, "password"),
+			"congestion_control": orDefault(csStr(m, "congestion-controller", "congestion_control"), "bbr"),
+			"tls":                clashTLSBlock(m, true, server),
+		}, nil
+
+	case "anytls":
+		return map[string]interface{}{
+			"type": "anytls", "tag": tag, "server": server, "server_port": port,
+			"password": csStr(m, "password"),
+			"tls":      clashTLSBlock(m, true, server),
+		}, nil
+
+	case "ssh":
+		out := map[string]interface{}{
+			"type": "ssh", "tag": tag, "server": server, "server_port": port,
+			"user": csStr(m, "username", "user"),
+		}
+		if pw := csStr(m, "password"); pw != "" {
+			out["password"] = pw
+		}
+		if pk := csStr(m, "private-key", "private_key"); pk != "" {
+			out["private_key"] = pk
+		}
+		return out, nil
+
+	case "wireguard", "wg":
+		out := map[string]interface{}{
+			"type": "wireguard", "tag": tag, "server": server, "server_port": port,
+			"private_key":     csStr(m, "private-key", "private_key"),
+			"peer_public_key": csStr(m, "public-key", "peer_public_key"),
+		}
+		if addrs := csStrList(m, "ip", "ipv6", "local-address"); len(addrs) > 0 {
+			out["local_address"] = addrs
+		}
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported clash proxy type %q", typ)
+	}
+}
+
+// ---------------------------------------------------------------------
+// پارس خط‌محور: خطوط URI + خطوط ساده‌ی IP:PORT
+// ---------------------------------------------------------------------
+
+func parseLineBasedSubscription(content string) (out []map[string]interface{}, warnings []string, err error) {
+	lines := strings.Split(content, "\n")
+	found := 0
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		ob, perr := parseSubscriptionLine(line)
+		if perr != nil {
+			warnings = append(warnings, fmt.Sprintf("line %d: %v, skipped", i+1, perr))
+			continue
+		}
+		found++
+		out = append(out, ob)
+	}
+	if found == 0 {
+		return nil, warnings, fmt.Errorf("no recognizable node lines found")
+	}
+	return out, warnings, nil
+}
+
+func parseSubscriptionLine(line string) (map[string]interface{}, error) {
+	switch {
+	case strings.HasPrefix(line, "vmess://"):
+		return parseVmessURI(line)
+	case strings.HasPrefix(line, "vless://"):
+		return parseVlessURI(line)
+	case strings.HasPrefix(line, "trojan://"):
+		return parseTrojanURI(line)
+	case strings.HasPrefix(line, "ss://"):
+		return parseSSURI(line)
+	case strings.HasPrefix(line, "hysteria2://"), strings.HasPrefix(line, "hy2://"):
+		return parseHysteria2URI(line)
+	case strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"),
+		strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "socks5h://"):
+		return parseSimpleProxyURI(line)
+	default:
+		if host, port, user, pass, ok := parsePlainHostPortLine(line); ok {
+			return plainLineToOutbound(host, port, user, pass), nil
+		}
+		return nil, fmt.Errorf("unrecognized line format")
+	}
+}
+
+func tagFromFragment(u *url.URL, fallback string) string {
+	if u.Fragment != "" {
+		if t, uerr := url.QueryUnescape(u.Fragment); uerr == nil && t != "" {
+			return t
+		}
+		return u.Fragment
+	}
+	return fallback
+}
+
+func b64DecodeLoose(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	if m := len(s) % 4; m != 0 {
+		s += strings.Repeat("=", 4-m)
+	}
+	if b, decErr := base64.StdEncoding.DecodeString(s); decErr == nil {
+		return b, nil
+	}
+	return base64.URLEncoding.DecodeString(s)
+}
+
+// --- vmess:// (سبک v2rayN: base64 روی یک JSON) ---
+func parseVmessURI(line string) (map[string]interface{}, error) {
+	payload := strings.TrimPrefix(line, "vmess://")
+	raw, derr := b64DecodeLoose(payload)
+	if derr != nil {
+		return nil, fmt.Errorf("vmess: base64 decode failed: %w", derr)
+	}
+	var v map[string]interface{}
+	if jerr := json.Unmarshal(raw, &v); jerr != nil {
+		return nil, fmt.Errorf("vmess: JSON decode failed: %w", jerr)
+	}
+	server := csStr(v, "add")
+	port := csInt(v, 0, "port")
+	if server == "" || port == 0 {
+		return nil, fmt.Errorf("vmess: missing add/port")
+	}
+	tag := csStr(v, "ps")
+	if tag == "" {
+		tag = fmt.Sprintf("%s:%d", server, port)
+	}
+	out := map[string]interface{}{
+		"type": "vmess", "tag": tag, "server": server, "server_port": port,
+		"uuid": csStr(v, "id"), "security": orDefault(csStr(v, "scy"), "auto"),
+		"alter_id": csInt(v, 0, "aid"),
+	}
+	if tlsMode := csStr(v, "tls"); tlsMode != "" {
+		sni := orDefault(csStr(v, "sni"), csStr(v, "host"))
+		tls := map[string]interface{}{"enabled": true, "server_name": orDefault(sni, server), "insecure": false}
+		if alpn := csStr(v, "alpn"); alpn != "" {
+			tls["alpn"] = strings.Split(alpn, ",")
+		}
+		if fp := csStr(v, "fp"); fp != "" {
+			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": fp}
+		}
+		out["tls"] = tls
+	}
+	switch csStr(v, "net") {
+	case "ws":
+		out["transport"] = map[string]interface{}{
+			"type": "ws", "path": csStr(v, "path"),
+			"headers": map[string]interface{}{"Host": csStr(v, "host")},
+		}
+	case "grpc":
+		out["transport"] = map[string]interface{}{"type": "grpc", "service_name": csStr(v, "path")}
+	case "h2":
+		var hosts []string
+		if host := csStr(v, "host"); host != "" {
+			hosts = strings.Split(host, ",")
+		}
+		out["transport"] = map[string]interface{}{"type": "http", "host": hosts, "path": csStr(v, "path")}
+	case "httpupgrade":
+		out["transport"] = map[string]interface{}{"type": "httpupgrade", "host": csStr(v, "host"), "path": csStr(v, "path")}
+	}
+	return out, nil
+}
+
+// --- vless://uuid@host:port?params#tag ---
+func parseVlessURI(line string) (map[string]interface{}, error) {
+	u, uerr := url.Parse(line)
+	if uerr != nil {
+		return nil, fmt.Errorf("vless: %w", uerr)
+	}
+	uuid := u.User.Username()
+	host, portStr, herr := net.SplitHostPort(u.Host)
+	if herr != nil {
+		return nil, fmt.Errorf("vless: invalid host:port: %w", herr)
+	}
+	port, _ := strconv.Atoi(portStr)
+	if uuid == "" || host == "" || port == 0 {
+		return nil, fmt.Errorf("vless: missing uuid/host/port")
+	}
+	q := u.Query()
+	tag := tagFromFragment(u, fmt.Sprintf("%s:%d", host, port))
+	out := map[string]interface{}{
+		"type": "vless", "tag": tag, "server": host, "server_port": port, "uuid": uuid,
+	}
+	if flow := q.Get("flow"); flow != "" {
+		out["flow"] = flow
+	}
+	security := q.Get("security")
+	if security == "tls" || security == "reality" {
+		tls := map[string]interface{}{
+			"enabled": true, "server_name": orDefault(q.Get("sni"), host),
+			"insecure": q.Get("allowInsecure") == "1" || q.Get("insecure") == "1",
+		}
+		if alpn := q.Get("alpn"); alpn != "" {
+			tls["alpn"] = strings.Split(alpn, ",")
+		}
+		if fp := q.Get("fp"); fp != "" {
+			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": fp}
+		}
+		if security == "reality" {
+			tls["reality"] = map[string]interface{}{
+				"enabled": true, "public_key": q.Get("pbk"), "short_id": q.Get("sid"),
+			}
+		}
+		out["tls"] = tls
+	}
+	if tr := uriTransportBlock(q); tr != nil {
+		out["transport"] = tr
+	}
+	return out, nil
+}
+
+// --- trojan://password@host:port?params#tag ---
+func parseTrojanURI(line string) (map[string]interface{}, error) {
+	u, uerr := url.Parse(line)
+	if uerr != nil {
+		return nil, fmt.Errorf("trojan: %w", uerr)
+	}
+	password := u.User.Username()
+	host, portStr, herr := net.SplitHostPort(u.Host)
+	if herr != nil {
+		return nil, fmt.Errorf("trojan: invalid host:port: %w", herr)
+	}
+	port, _ := strconv.Atoi(portStr)
+	if password == "" || host == "" || port == 0 {
+		return nil, fmt.Errorf("trojan: missing password/host/port")
+	}
+	q := u.Query()
+	tag := tagFromFragment(u, fmt.Sprintf("%s:%d", host, port))
+	tls := map[string]interface{}{
+		"enabled": q.Get("security") != "none", "server_name": orDefault(q.Get("sni"), host),
+		"insecure": q.Get("allowInsecure") == "1" || q.Get("insecure") == "1",
+	}
+	out := map[string]interface{}{
+		"type": "trojan", "tag": tag, "server": host, "server_port": port,
+		"password": password, "tls": tls,
+	}
+	if tr := uriTransportBlock(q); tr != nil {
+		out["transport"] = tr
+	}
+	return out, nil
+}
+
+func uriTransportBlock(q url.Values) map[string]interface{} {
+	switch q.Get("type") {
+	case "ws":
+		t := map[string]interface{}{"type": "ws", "path": q.Get("path")}
+		if host := q.Get("host"); host != "" {
+			t["headers"] = map[string]interface{}{"Host": host}
+		}
+		return t
+	case "grpc":
+		return map[string]interface{}{"type": "grpc", "service_name": q.Get("serviceName")}
+	case "http", "h2":
+		var hosts []string
+		if h := q.Get("host"); h != "" {
+			hosts = strings.Split(h, ",")
+		}
+		return map[string]interface{}{"type": "http", "host": hosts, "path": q.Get("path")}
+	case "httpupgrade":
+		return map[string]interface{}{"type": "httpupgrade", "host": q.Get("host"), "path": q.Get("path")}
+	}
+	return nil
+}
+
+// --- ss://... (فرم SIP002: userinfo پایه۶۴شده، یا فرم قدیمی: کل رشته پایه۶۴شده) ---
+func parseSSURI(line string) (map[string]interface{}, error) {
+	body := strings.TrimPrefix(line, "ss://")
+	tagPart := ""
+	if idx := strings.Index(body, "#"); idx >= 0 {
+		if t, uerr := url.QueryUnescape(body[idx+1:]); uerr == nil {
+			tagPart = t
+		} else {
+			tagPart = body[idx+1:]
+		}
+		body = body[:idx]
+	}
+	query := ""
+	if idx := strings.Index(body, "?"); idx >= 0 {
+		query = body[idx+1:]
+		body = body[:idx]
+	}
+
+	var methodPass, hostPort string
+	if idx := strings.LastIndex(body, "@"); idx >= 0 {
+		userinfo, hp := body[:idx], body[idx+1:]
+		hostPort = hp
+		if dec, derr := b64DecodeLoose(userinfo); derr == nil && strings.Contains(string(dec), ":") {
+			methodPass = string(dec)
+		} else {
+			methodPass = userinfo
+		}
+	} else {
+		dec, derr := b64DecodeLoose(body)
+		if derr != nil {
+			return nil, fmt.Errorf("ss: base64 decode failed: %w", derr)
+		}
+		at := strings.LastIndex(string(dec), "@")
+		if at < 0 {
+			return nil, fmt.Errorf("ss: decoded form missing '@'")
+		}
+		methodPass, hostPort = string(dec[:at]), string(dec[at+1:])
+	}
+	mp := strings.SplitN(methodPass, ":", 2)
+	if len(mp) != 2 {
+		return nil, fmt.Errorf("ss: malformed method:password")
+	}
+	host, portStr, herr := net.SplitHostPort(hostPort)
+	if herr != nil {
+		return nil, fmt.Errorf("ss: invalid host:port: %w", herr)
+	}
+	port, _ := strconv.Atoi(portStr)
+	tag := tagPart
+	if tag == "" {
+		tag = fmt.Sprintf("%s:%d", host, port)
+	}
+	out := map[string]interface{}{
+		"type": "shadowsocks", "tag": tag, "server": host, "server_port": port,
+		"method": mp[0], "password": mp[1],
+	}
+	if query != "" {
+		q, _ := url.ParseQuery(query)
+		if plugin := q.Get("plugin"); plugin != "" {
+			parts := strings.SplitN(plugin, ";", 2)
+			out["plugin"] = parts[0]
+			if len(parts) > 1 {
+				out["plugin_opts"] = parts[1]
+			}
+		}
+	}
+	return out, nil
+}
+
+// --- hysteria2://password@host:port?params#tag (hy2:// هم به‌عنوان alias پذیرفته می‌شود) ---
+func parseHysteria2URI(line string) (map[string]interface{}, error) {
+	line = strings.Replace(line, "hy2://", "hysteria2://", 1)
+	u, uerr := url.Parse(line)
+	if uerr != nil {
+		return nil, fmt.Errorf("hysteria2: %w", uerr)
+	}
+	password := u.User.Username()
+	host, portStr, herr := net.SplitHostPort(u.Host)
+	if herr != nil {
+		return nil, fmt.Errorf("hysteria2: invalid host:port: %w", herr)
+	}
+	port, _ := strconv.Atoi(portStr)
+	if host == "" || port == 0 {
+		return nil, fmt.Errorf("hysteria2: missing host/port")
+	}
+	q := u.Query()
+	tag := tagFromFragment(u, fmt.Sprintf("%s:%d", host, port))
+	out := map[string]interface{}{
+		"type": "hysteria2", "tag": tag, "server": host, "server_port": port, "password": password,
+		"tls": map[string]interface{}{
+			"enabled": true, "server_name": orDefault(q.Get("sni"), host),
+			"insecure": q.Get("insecure") == "1",
+		},
+	}
+	if obfs := q.Get("obfs"); obfs != "" {
+		out["obfs"] = map[string]interface{}{"type": obfs, "password": q.Get("obfs-password")}
+	}
+	return out, nil
+}
+
+// --- http:// https:// socks5:// socks5h://   scheme://[user:pass@]host:port[#tag] ---
+func parseSimpleProxyURI(line string) (map[string]interface{}, error) {
+	u, uerr := url.Parse(line)
+	if uerr != nil {
+		return nil, fmt.Errorf("proxy uri: %w", uerr)
+	}
+	host, portStr, herr := net.SplitHostPort(u.Host)
+	if herr != nil {
+		return nil, fmt.Errorf("proxy uri: invalid host:port: %w", herr)
+	}
+	port, _ := strconv.Atoi(portStr)
+	if host == "" || port == 0 {
+		return nil, fmt.Errorf("proxy uri: missing host/port")
+	}
+	tag := tagFromFragment(u, fmt.Sprintf("%s:%d", host, port))
+	username := u.User.Username()
+	password, _ := u.User.Password()
+	q := u.Query()
+
+	switch u.Scheme {
+	case "http", "https":
+		out := map[string]interface{}{
+			"type": "http", "tag": tag, "server": host, "server_port": port,
+			"username": username, "password": password,
+		}
+		if u.Scheme == "https" {
+			sni := q.Get("sni")
+			if sni == "" {
+				sni = q.Get("servername")
+			}
+			if sni == "" {
+				sni = q.Get("peer")
+			}
+			out["tls"] = map[string]interface{}{
+				"enabled": true, "server_name": orDefault(sni, host),
+				"insecure": q.Get("allowInsecure") == "1" || q.Get("insecure") == "1",
+			}
+		}
+		return out, nil
+	case "socks5", "socks5h":
+		return map[string]interface{}{
+			"type": "socks", "tag": tag, "server": host, "server_port": port, "version": "5",
+			"username": username, "password": password,
+		}, nil
+	}
+	return nil, fmt.Errorf("proxy uri: unsupported scheme %q", u.Scheme)
+}
+
+// --- خطوط ساده: IP:PORT یا IP:PORT:USER:PASS (IPv4 و IPv6) ---
+
+// parsePlainHostPortLine هم IPv4 و هم IPv6 (با یا بدون براکت) را تشخیص می‌دهد.
+// برای IPv6 بدون براکت، چون خودِ آدرس هم ":" دارد، از سمت راست کار می‌کند: آخرین
+// ۱ یا ۳ فیلد جداشده‌با‌":" را PORT یا PORT:USER:PASS در نظر می‌گیرد و باقی‌مانده
+// را به‌عنوان IP اعتبارسنجی می‌کند.
+func parsePlainHostPortLine(line string) (host string, port int, user, pass string, ok bool) {
+	if strings.HasPrefix(line, "[") {
+		closeIdx := strings.Index(line, "]")
+		if closeIdx < 0 {
+			return "", 0, "", "", false
+		}
+		ipPart := line[1:closeIdx]
+		if net.ParseIP(ipPart) == nil {
+			return "", 0, "", "", false
+		}
+		rest := strings.TrimPrefix(line[closeIdx+1:], ":")
+		return finishPlainLine(ipPart, rest)
+	}
+
+	parts := strings.Split(line, ":")
+	if len(parts) < 2 {
+		return "", 0, "", "", false
+	}
+	if reIPv4.MatchString(parts[0]) {
+		if len(parts) == 2 {
+			return finishPlainLine(parts[0], parts[1])
+		}
+		if len(parts) == 4 {
+			return finishPlainLine(parts[0], strings.Join(parts[1:], ":"))
+		}
+		return "", 0, "", "", false
+	}
+	if len(parts) >= 2 {
+		candidateIP := strings.Join(parts[:len(parts)-1], ":")
+		if net.ParseIP(candidateIP) != nil {
+			return finishPlainLine(candidateIP, parts[len(parts)-1])
+		}
+	}
+	if len(parts) >= 4 {
+		candidateIP := strings.Join(parts[:len(parts)-3], ":")
+		if net.ParseIP(candidateIP) != nil {
+			return finishPlainLine(candidateIP, strings.Join(parts[len(parts)-3:], ":"))
+		}
+	}
+	return "", 0, "", "", false
+}
+
+func finishPlainLine(host, tail string) (string, int, string, string, bool) {
+	fields := strings.SplitN(tail, ":", 3)
+	port, perr := strconv.Atoi(fields[0])
+	if perr != nil || port < 1 || port > 65535 {
+		return "", 0, "", "", false
+	}
+	user, pass := "", ""
+	if len(fields) == 3 {
+		user, pass = fields[1], fields[2]
+	} else if len(fields) == 2 {
+		return "", 0, "", "", false // "PORT:USER" بدون پسورد فرمت پشتیبانی‌شده‌ای نیست
+	}
+	return host, port, user, pass, true
+}
+
+// plainLineToOutbound: خطوط ساده طبق مستندات Resin به‌عنوان پراکسی HTTP در نظر
+// گرفته می‌شوند (نه SOCKS).
+func plainLineToOutbound(host string, port int, user, pass string) map[string]interface{} {
+	out := map[string]interface{}{
+		"type": "http", "tag": fmt.Sprintf("%s:%d", host, port), "server": host, "server_port": port,
+	}
+	if user != "" || pass != "" {
+		out["username"] = user
+		out["password"] = pass
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------
+// منطق کسب‌وکار Subscriptions: fetch/refresh، namespaced‌کردن تگ‌ها، و ادغام با
+// renderConfig (گروه auto اختصاصی هر subscription + عضویت در selectorOptions،
+// دقیقاً هم‌الگو با WARP). فایل‌های خروجی subscriptionsDir/<name>.json — نه
+// nodes.json و نه template.json — تنها منبع این نودها هستند.
+// ---------------------------------------------------------------------
+
+func subscriptionNodesPath(name string) string {
+	return filepath.Join(subscriptionsDir, name+".json")
+}
+
+// existingWarpGroupPrefixes پیشوند گروه‌های WARP فعلی (از nodes.json) را
+// برمی‌گرداند — برای جلوگیری از تداخل نام یک subscription با یک گروه WARP
+// (هر دو تگ "<name>-auto" می‌سازند).
+func existingWarpGroupPrefixes() map[string]bool {
+	out := map[string]bool{}
+	var nodes []interface{}
+	_ = readJSON(nodesFile, &nodes)
+	for _, n := range nodes {
+		m, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		t, _ := m["type"].(string)
+		if t != "wireguard" && t != "tailscale" {
+			continue
+		}
+		tag, _ := m["tag"].(string)
+		if prefix, grouped := groupPrefixForTag(tag); grouped {
+			out[prefix] = true
+		}
+	}
+	return out
+}
+
+var subReservedNames = map[string]bool{"auto": true, "direct": true}
+
+func validateSubscriptionName(name string, state AppState) error {
+	if !subscriptionNameRe.MatchString(name) {
+		return fmt.Errorf("name must be 1-40 letters/digits/underscore/hyphen")
+	}
+	if subReservedNames[name] {
+		return fmt.Errorf("%q is a reserved name", name)
+	}
+	if existingWarpGroupPrefixes()[name] {
+		return fmt.Errorf("%q is already used as a WARP group name", name)
+	}
+	for _, s := range state.Subscriptions {
+		if s.Name == name {
+			return fmt.Errorf("a subscription named %q already exists", name)
+		}
+	}
+	return nil
+}
+
+// namespaceSubscriptionOutbounds تگ هر outbound این subscription را به شکل
+// "<subName>/<تگ اصلی>" یکتا می‌کند تا با تگ سایر subscriptionها، WARP، یا
+// نودهای دستی برخورد نکند؛ تگ‌های تکراری داخل همین subscription هم با یک
+// پسوند عددی جدا می‌شوند.
+func namespaceSubscriptionOutbounds(subName string, obs []map[string]interface{}) []map[string]interface{} {
+	seen := map[string]int{}
+	out := make([]map[string]interface{}, 0, len(obs))
+	for _, ob := range obs {
+		clone := cloneMap(ob)
+		origTag, _ := clone["tag"].(string)
+		if origTag == "" {
+			origTag = "node"
+		}
+		base := subName + "/" + origTag
+		seen[base]++
+		tag := base
+		if n := seen[base]; n > 1 {
+			tag = fmt.Sprintf("%s-%d", base, n)
+		}
+		clone["tag"] = tag
+		out = append(out, clone)
+	}
+	return out
+}
+
+// fetchSubscriptionContent محتوای خام subscription را برمی‌گرداند: برای
+// remote یک HTTP GET (با timeout و User-Agent سازگار با clash.meta تا
+// ارائه‌دهنده‌هایی که بر اساس UA فیلتر می‌کنند هم جواب بدهند)، برای local همان
+// Content ذخیره‌شده.
+func fetchSubscriptionContent(sub Subscription) ([]byte, error) {
+	if sub.SourceType == "local" {
+		return []byte(sub.Content), nil
+	}
+	if sub.URL == "" {
+		return nil, fmt.Errorf("no URL configured")
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	req, err := http.NewRequest("GET", sub.URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "clash.meta/sing-box-manager")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20)) // سقف ۳۲ مگابایت، در برابر subscription بدخیم/بی‌نهایت محافظت می‌کند
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// refreshSubscription محتوا را می‌گیرد، پارس می‌کند، فایل کش را می‌نویسد، و
+// وضعیت (node_count/last_fetched/last_error) را در state به‌روزرسانی و ذخیره
+// می‌کند. چون رفرش فقط دستی است (بدون زمان‌بند پس‌زمینه)، این تابع مستقیماً از
+// هندلرهای add/refresh صدا زده می‌شود.
+func refreshSubscription(state *AppState, name string) error {
+	idx := -1
+	for i, s := range state.Subscriptions {
+		if s.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("subscription %q not found", name)
+	}
+	sub := state.Subscriptions[idx]
+
+	raw, fetchErr := fetchSubscriptionContent(sub)
+	if fetchErr != nil {
+		state.Subscriptions[idx].LastError = fetchErr.Error()
+		state.Subscriptions[idx].LastFetched = time.Now().UTC().Format(time.RFC3339)
+		_ = writeState(*state)
+		return fetchErr
+	}
+
+	obs, warnings, parseErr := parseGeneralSubscription(raw)
+	if parseErr != nil {
+		state.Subscriptions[idx].LastError = parseErr.Error()
+		state.Subscriptions[idx].LastFetched = time.Now().UTC().Format(time.RFC3339)
+		_ = writeState(*state)
+		return parseErr
+	}
+
+	if err := writeJSONAtomic(subscriptionNodesPath(name), map[string]interface{}{"outbounds": obs}); err != nil {
+		state.Subscriptions[idx].LastError = "failed to write cache: " + err.Error()
+		_ = writeState(*state)
+		return err
+	}
+
+	lastErr := ""
+	if len(warnings) > 0 {
+		lastErr = fmt.Sprintf("%d node(s) skipped (see server log)", len(warnings))
+		for _, w := range warnings {
+			log.Printf("refreshSubscription %q: %s", name, w)
+		}
+	}
+	state.Subscriptions[idx].NodeCount = len(obs)
+	state.Subscriptions[idx].LastFetched = time.Now().UTC().Format(time.RFC3339)
+	state.Subscriptions[idx].LastError = lastErr
+	if err := writeState(*state); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadSubscriptionOutbounds فایل‌های کش همه‌ی subscriptionهای فعال را می‌خواند
+// و دقیقاً هم‌شکل خروجی حلقه‌ی WARP در renderConfig برمی‌گرداند — تا بشود آن‌ها
+// را مستقیم به همان متغیرها append کرد و از همان منطق selectorOptions/fallback
+// موجود (بدون تغییر) عبور دهد. subscription غیرفعال یا بدون کش معتبر بی‌صدا رد
+// می‌شود؛ یک subscription خراب نباید کل تولید کانفیگ را متوقف کند.
+func loadSubscriptionOutbounds(subs []Subscription, urltestDefaults map[string]interface{}) (endpointNodes []interface{}, proxyNodes []interface{}, groupAutoOutbounds []interface{}, groupAutoTags []string) {
+	for _, sub := range subs {
+		if !sub.Enabled {
+			continue
+		}
+		var cache struct {
+			Outbounds []map[string]interface{} `json:"outbounds"`
+		}
+		if err := readJSON(subscriptionNodesPath(sub.Name), &cache); err != nil || len(cache.Outbounds) == 0 {
+			continue
+		}
+		namespaced := namespaceSubscriptionOutbounds(sub.Name, cache.Outbounds)
+		var tags []string
+		for _, ob := range namespaced {
+			tag, _ := ob["tag"].(string)
+			if tag == "" {
+				continue
+			}
+			tags = append(tags, tag)
+			typ, _ := ob["type"].(string)
+			if typ == "wireguard" || typ == "tailscale" {
+				endpointNodes = append(endpointNodes, interface{}(ob))
+			} else {
+				proxyNodes = append(proxyNodes, interface{}(ob))
+			}
+		}
+		if len(tags) == 0 {
+			continue
+		}
+		sort.Strings(tags)
+		autoTag := sub.Name + "-auto"
+		groupAutoTags = append(groupAutoTags, autoTag)
+		groupAutoOutbounds = append(groupAutoOutbounds, map[string]interface{}{
+			"tag": autoTag, "type": "urltest",
+			"interval": urltestDefaults["interval"], "tolerance": urltestDefaults["tolerance"], "url": urltestDefaults["url"],
+			"outbounds": toInterfaceSlice(tags),
+		})
+	}
+	return
+}
+
+// ---------------------------------------------------------------------
+// HTTP handlers: Subscriptions
+// ---------------------------------------------------------------------
+
+func listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	if state.Subscriptions == nil {
+		state.Subscriptions = []Subscription{}
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"subscriptions": state.Subscriptions})
+}
+
+func addSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	var req Subscription
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.SourceType != "remote" && req.SourceType != "local" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "source_type must be \"remote\" or \"local\""})
+		return
+	}
+	if req.SourceType == "remote" && strings.TrimSpace(req.URL) == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "url is required for a remote subscription"})
+		return
+	}
+	if req.SourceType == "local" && strings.TrimSpace(req.Content) == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "content is required for a local subscription"})
+		return
+	}
+
+	state := readStateOrDefault()
+	if err := validateSubscriptionName(req.Name, state); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	req.Enabled = true
+	req.NodeCount = 0
+	req.LastError = ""
+	req.LastFetched = ""
+	state.Subscriptions = append(state.Subscriptions, req)
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+
+	msg := fmt.Sprintf("Subscription %q added", req.Name)
+	if err := refreshSubscription(&state, req.Name); err != nil {
+		msg = fmt.Sprintf("Subscription %q added, but the first fetch failed: %v", req.Name, err)
+	} else if err := applyCurrentTemplateAndNodes(); err != nil {
+		msg = fmt.Sprintf("Subscription %q added and fetched, but applying it to sing-box failed: %v", req.Name, err)
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": msg})
+}
+
+func editSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name       string `json:"name"`
+		SourceType string `json:"source_type,omitempty"`
+		URL        string `json:"url,omitempty"`
+		Content    string `json:"content,omitempty"`
+		Enabled    *bool  `json:"enabled,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	state := readStateOrDefault()
+	idx := -1
+	for i, s := range state.Subscriptions {
+		if s.Name == req.Name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("subscription %q not found", req.Name)})
+		return
+	}
+	if req.SourceType != "" {
+		if req.SourceType != "remote" && req.SourceType != "local" {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "source_type must be \"remote\" or \"local\""})
+			return
+		}
+		state.Subscriptions[idx].SourceType = req.SourceType
+	}
+	if req.URL != "" {
+		state.Subscriptions[idx].URL = req.URL
+	}
+	if req.Content != "" {
+		state.Subscriptions[idx].Content = req.Content
+	}
+	if req.Enabled != nil {
+		state.Subscriptions[idx].Enabled = *req.Enabled
+	}
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+	msg := fmt.Sprintf("Subscription %q updated", req.Name)
+	if state.Subscriptions[idx].Enabled {
+		if err := refreshSubscription(&state, req.Name); err != nil {
+			msg = fmt.Sprintf("Subscription %q updated, but refresh failed: %v", req.Name, err)
+		} else if err := applyCurrentTemplateAndNodes(); err != nil {
+			msg = fmt.Sprintf("Subscription %q updated and fetched, but applying it to sing-box failed: %v", req.Name, err)
+		}
+	} else if err := applyCurrentTemplateAndNodes(); err != nil {
+		// غیرفعال شد — باید از selectorOptions زنده هم حذف شود.
+		msg = fmt.Sprintf("Subscription %q disabled, but applying that to sing-box failed: %v", req.Name, err)
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": msg})
+}
+
+func refreshSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	state := readStateOrDefault()
+	if err := refreshSubscription(&state, req.Name); err != nil {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	idx := -1
+	for i, s := range state.Subscriptions {
+		if s.Name == req.Name {
+			idx = i
+		}
+	}
+	resp := map[string]interface{}{
+		"message":    fmt.Sprintf("Subscription %q refreshed", req.Name),
+		"node_count": state.Subscriptions[idx].NodeCount,
+	}
+	if err := applyCurrentTemplateAndNodes(); err != nil {
+		resp["message"] = fmt.Sprintf("Subscription %q refreshed, but applying it to sing-box failed: %v", req.Name, err)
+	}
+	jsonResponse(w, http.StatusOK, resp)
+}
+
+func deleteSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	state := readStateOrDefault()
+	var kept []Subscription
+	found := false
+	for _, s := range state.Subscriptions {
+		if s.Name == req.Name {
+			found = true
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if !found {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("subscription %q not found", req.Name)})
+		return
+	}
+	state.Subscriptions = kept
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save: " + err.Error()})
+		return
+	}
+	_ = os.Remove(subscriptionNodesPath(req.Name))
+	msg := fmt.Sprintf("Subscription %q removed", req.Name)
+	if err := applyCurrentTemplateAndNodes(); err != nil {
+		msg = fmt.Sprintf("Subscription %q removed, but applying that to sing-box failed: %v", req.Name, err)
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": msg})
 }
 
 // ---------------------------------------------------------------------
@@ -6626,8 +8144,8 @@ func startBackupScheduler() {
 
 func backupSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	out := map[string]interface{}{
-		"paths_default": backupDefaultPaths(),
-		"paths_extra":   backupExtraPaths(),
+		"paths_default":  backupDefaultPaths(),
+		"paths_extra":    backupExtraPaths(),
 		"passphrase_set": getSetting("BACKUP_PASSPHRASE", "") != "",
 	}
 	cadences := map[string]interface{}{}
@@ -6641,7 +8159,7 @@ func backupSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		"enabled": backupBoolSetting("BACKUP_S3_ENABLED", false), "configured": s3ok,
 		"endpoint": getSetting("BACKUP_S3_ENDPOINT", ""), "region": getSetting("BACKUP_S3_REGION", ""),
 		"bucket": getSetting("BACKUP_S3_BUCKET", ""), "prefix": getSetting("BACKUP_S3_PREFIX", ""),
-		"use_ssl": backupBoolSetting("BACKUP_S3_USE_SSL", true),
+		"use_ssl":        backupBoolSetting("BACKUP_S3_USE_SSL", true),
 		"access_key_set": getSetting("BACKUP_S3_ACCESS_KEY", "") != "", "secret_key_set": getSetting("BACKUP_S3_SECRET_KEY", "") != "",
 	}
 	_, r2ok := backupR2Target()
@@ -6652,7 +8170,7 @@ func backupSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		"cloudflare_token_available": strings.TrimSpace(readStateOrDefault().Cloudflare.APIToken) != "",
 	}
 	out["telegram"] = map[string]interface{}{
-		"enabled": backupBoolSetting("BACKUP_TELEGRAM_ENABLED", false),
+		"enabled":       backupBoolSetting("BACKUP_TELEGRAM_ENABLED", false),
 		"bot_token_set": getSetting("BACKUP_TELEGRAM_BOT_TOKEN", "") != "", "chat_id": getSetting("BACKUP_TELEGRAM_CHAT_ID", ""),
 	}
 
@@ -6858,6 +8376,11 @@ func main() {
 	http.HandleFunc("/api/docker_services", requireAuth(requireMethod(http.MethodGet, dockerServicesHandler)))
 	http.HandleFunc("/api/add_docker_service", requireAuth(requireMethod(http.MethodPost, addDockerServiceHandler)))
 	http.HandleFunc("/api/delete_docker_service", requireAuth(requireMethod(http.MethodPost, deleteDockerServiceHandler)))
+	http.HandleFunc("/api/subscriptions", requireAuth(requireMethod(http.MethodGet, listSubscriptionsHandler)))
+	http.HandleFunc("/api/add_subscription", requireAuth(requireMethod(http.MethodPost, addSubscriptionHandler)))
+	http.HandleFunc("/api/edit_subscription", requireAuth(requireMethod(http.MethodPost, editSubscriptionHandler)))
+	http.HandleFunc("/api/refresh_subscription", requireAuth(requireMethod(http.MethodPost, refreshSubscriptionHandler)))
+	http.HandleFunc("/api/delete_subscription", requireAuth(requireMethod(http.MethodPost, deleteSubscriptionHandler)))
 	http.HandleFunc("/api/cloudflare/settings", requireAuth(settingsMethodRouter(cloudflareSettingsHandler, updateCloudflareSettingsHandler)))
 	http.HandleFunc("/api/cloudflare/start", requireAuth(requireMethod(http.MethodPost, cloudflareStartHandler)))
 	http.HandleFunc("/api/cloudflare/stop", requireAuth(requireMethod(http.MethodPost, cloudflareStopHandler)))
