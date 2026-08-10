@@ -1,0 +1,10 @@
+metacubexd
+subscriptions
+__debug_*
+sing
+bin
+cache.db
+config.json
+nodes.json
+state.json
+template.json

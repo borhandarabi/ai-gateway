@@ -95,13 +95,22 @@ func getEnvDefault(key, def string) string {
 	return def
 }
 
+func getEnvIntDefault(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return def
+}
+
 // managedEnvKeys لیست کلیدهای مبتنی‌بر env هستند که از صفحه‌ی Settings هم قابل
 // مدیریت‌اند (نه فقط با export کردن قبل از اجرا).
 var managedEnvKeys = []string{
 	"BIND_ADDR", "API_PORT", "PROXY_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR", "DEFAULT_SERVICES",
-	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT",
+	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
 	"MIMO_PROXY_PORT", "KIMI_PROXY_PORT", "DEEPSEEK_PROXY_PORT", "ZAI_PROXY_PORT", "GROK2API_PROXY_PORT",
 }
 
@@ -122,6 +131,7 @@ var managedEnvDefaults = map[string]string{
 	"ZAI_PORT":                 "3001",
 	"GROK2API_PORT":            "3004",
 	"FLARESOLVERR_PORT":        "8191",
+	"FLARESOLVERR_PROXY_PORT":  "2006",
 	"MIMO_PROXY_PORT":          "2003",
 	"KIMI_PROXY_PORT":          "2002",
 	"DEEPSEEK_PROXY_PORT":      "2005",
@@ -1182,9 +1192,27 @@ const htmlContent = `<!DOCTYPE html>
     return fetch(controllerBase + path, Object.assign({}, options, { headers: headers }));
   }
 
+  async function showLoginOverlay() {
+    try {
+      var base = await resolvePublicBaseUrl();
+      var p = parseUrlParts(base);
+      var host = p.host || window.location.hostname;
+      var port = p.port || (p.scheme === 'https' ? '443' : '80');
+      var defaultVal = p.scheme + '://' + host + ':' + port;
+      var input = document.getElementById('controllerInput');
+      if (input.value === '127.0.0.1:9090' || input.value === '') {
+        input.value = defaultVal;
+        input.placeholder = defaultVal;
+      }
+    } catch (e) {
+      console.error('Failed to resolve login URL', e);
+    }
+    document.getElementById('loginOverlay').style.display = 'flex';
+  }
+
   async function checkStoredCredentials(){
     if (!controllerBase){
-      document.getElementById('loginOverlay').style.display = 'flex';
+      showLoginOverlay();
       return;
     }
     try {
@@ -1203,7 +1231,7 @@ const htmlContent = `<!DOCTYPE html>
     sessionStorage.removeItem('secret');
     controllerBase = '';
     secret = '';
-    document.getElementById('loginOverlay').style.display = 'flex';
+    showLoginOverlay();
   }
   function enterApp(){
     document.getElementById('loginOverlay').style.display = 'none';
@@ -2544,7 +2572,8 @@ const htmlContent = `<!DOCTYPE html>
     DEEPSEEK_PORT: 'DeepSeekApi port',
     ZAI_PORT: 'ZaiApi / GlmApi port',
     GROK2API_PORT: 'Grok2Api port',
-    FLARESOLVERR_PORT: 'FlareSolverr port'
+    FLARESOLVERR_PORT: 'FlareSolverr port',
+    FLARESOLVERR_PROXY_PORT: 'FlareSolverr proxy port'
   };
   async function loadEnvSettings(){
     try {
@@ -3300,16 +3329,16 @@ func ensureDefaultFiles() {
 	}
 }
 
-// defaultServiceDef یک سرویس پیش‌فرض (نام + پورت) است که در نصب تازه ساخته می‌شود.
+// defaultServiceDef یک سرویس پیش‌فرض است که در نصب تازه ساخته می‌شود.
 type defaultServiceDef struct {
-	Name string
-	Port int
+	Name       string
+	ProxyPort  int
+	ListenPort int
 }
 
 // parseDefaultServices لیست سرویس‌های پیش‌فرض را از متغیر محیطی DEFAULT_SERVICES
-// می‌خواند، با فرمت "name:port,name2:port2" — مثلاً "telegram:2083,youtube:2084".
-// اگر تنظیم نشده باشد، هیچ سرویس پیش‌فرضی ساخته نمی‌شود (فقط این‌باندهای پایه‌ی
-// خود template مثل in-global/in-auto/in-direct فعال خواهند بود).
+// می‌خواند، با فرمت "name:proxyPort:listenPort" — مثلاً "telegram:2083:3083,youtube:2084".
+// پورت‌ها آپشنال هستند. در صورت عدم تعریف، مقادیر صفر در نظر گرفته می‌شوند.
 func parseDefaultServices() []defaultServiceDef {
 	raw := strings.TrimSpace(os.Getenv("DEFAULT_SERVICES"))
 	if raw == "" {
@@ -3321,18 +3350,39 @@ func parseDefaultServices() []defaultServiceDef {
 		if part == "" {
 			continue
 		}
-		kv := strings.SplitN(part, ":", 2)
-		if len(kv) != 2 {
-			log.Printf("DEFAULT_SERVICES: skipping malformed entry %q (expected name:port)", part)
+		kv := strings.Split(part, ":")
+		if len(kv) > 3 {
+			log.Printf("DEFAULT_SERVICES: skipping malformed entry %q (too many fields)", part)
 			continue
 		}
+
 		name := strings.TrimSpace(kv[0])
-		port, err := strconv.Atoi(strings.TrimSpace(kv[1]))
-		if err != nil || !serviceNameRe.MatchString(name) || port < 1 || port > 65535 {
-			log.Printf("DEFAULT_SERVICES: skipping invalid entry %q", part)
+		if !serviceNameRe.MatchString(name) {
+			log.Printf("DEFAULT_SERVICES: skipping invalid entry %q (invalid name)", part)
 			continue
 		}
-		defs = append(defs, defaultServiceDef{Name: name, Port: port})
+
+		proxyPort := 0
+		listenPort := 0
+		var err error
+
+		if len(kv) > 1 && strings.TrimSpace(kv[1]) != "" {
+			proxyPort, err = strconv.Atoi(strings.TrimSpace(kv[1]))
+			if err != nil || proxyPort < 1 || proxyPort > 65535 {
+				log.Printf("DEFAULT_SERVICES: skipping invalid entry %q (invalid proxyPort)", part)
+				continue
+			}
+		}
+
+		if len(kv) > 2 && strings.TrimSpace(kv[2]) != "" {
+			listenPort, err = strconv.Atoi(strings.TrimSpace(kv[2]))
+			if err != nil || listenPort < 1 || listenPort > 65535 {
+				log.Printf("DEFAULT_SERVICES: skipping invalid entry %q (invalid listenPort)", part)
+				continue
+			}
+		}
+
+		defs = append(defs, defaultServiceDef{Name: name, ProxyPort: proxyPort, ListenPort: listenPort})
 	}
 	return defs
 }
@@ -3377,20 +3427,25 @@ func bootstrapFreshInstall() {
 	}
 
 	defaultServices := []ServiceDef{
-		{Name: "mimo", ListenPort: 3003, ProxyPort: 2003},
-		{Name: "kimi", ListenPort: 3002, ProxyPort: 2002},
-		{Name: "deepseek", ListenPort: 3005, ProxyPort: 2005},
-		{Name: "zai", ListenPort: 3001, ProxyPort: 2001},
-		{Name: "grok2api", ListenPort: 3004, ProxyPort: 2004},
-		{Name: "flaresolverr", ListenPort: 8191, ProxyPort: 0},
+		{Name: "mimo", ListenPort: getEnvIntDefault("MIMO_LISTEN_PORT", 3003), ProxyPort: getEnvIntDefault("MIMO_PROXY_PORT", 2003)},
+		{Name: "kimi", ListenPort: getEnvIntDefault("KIMI_LISTEN_PORT", 3002), ProxyPort: getEnvIntDefault("KIMI_PROXY_PORT", 2002)},
+		{Name: "deepseek", ListenPort: getEnvIntDefault("DEEPSEEK_LISTEN_PORT", 3005), ProxyPort: getEnvIntDefault("DEEPSEEK_PROXY_PORT", 2005)},
+		{Name: "zai", ListenPort: getEnvIntDefault("ZAI_LISTEN_PORT", 3001), ProxyPort: getEnvIntDefault("ZAI_PROXY_PORT", 2001)},
+		{Name: "grok2api", ListenPort: getEnvIntDefault("GROK2API_LISTEN_PORT", 3004), ProxyPort: getEnvIntDefault("GROK2API_PROXY_PORT", 2004)},
+		{Name: "flaresolverr", ListenPort: getEnvIntDefault("FLARESOLVERR_PORT", 8191), ProxyPort: getEnvIntDefault("FLARESOLVERR_PROXY_PORT", 2006)},
 	}
-	// Add user-defined default proxy services (ProxyPort only)
+	// Add user-defined default services
 	for _, svc := range parseDefaultServices() {
 		// check if it overrides an existing default by name
 		found := false
 		for i, ds := range defaultServices {
 			if ds.Name == svc.Name {
-				defaultServices[i].ProxyPort = svc.Port
+				if svc.ProxyPort != 0 {
+					defaultServices[i].ProxyPort = svc.ProxyPort
+				}
+				if svc.ListenPort != 0 {
+					defaultServices[i].ListenPort = svc.ListenPort
+				}
 				found = true
 				break
 			}
@@ -3398,8 +3453,8 @@ func bootstrapFreshInstall() {
 		if !found {
 			defaultServices = append(defaultServices, ServiceDef{
 				Name:       svc.Name,
-				ListenPort: 0, // Proxy-only services don't need a listen port initially, or it can be left 0
-				ProxyPort:  svc.Port,
+				ListenPort: svc.ListenPort,
+				ProxyPort:  svc.ProxyPort,
 			})
 		}
 	}
@@ -4464,14 +4519,14 @@ func startCloudflareTunnel() error {
 		log.Println("Cloudflare tunnel running (routes are managed manually in the Cloudflare dashboard)")
 
 	case "quick":
-		clashAddr, _ := getClashAPIAddr()
+		// clashAddr, _ := getClashAPIAddr()
 		targets := map[string]string{
 			// "panel" به reverse proxy محلی (نه مستقیم به apiPort) اشاره می‌کند: چون
 			// یک Quick Tunnel فقط یک مقصد دارد، این یک هاست‌نیم trycloudflare.com هم
 			// پنل مدیریت (روی "/") و هم همه‌ی DockerServiceها (زیر پیشوند مسیرشان،
 			// مثل "/zai/") را همزمان سرو می‌کند — به cf_push_ingress نیازی نیست.
 			"panel": "http://127.0.0.1:" + proxyPort,
-			"dash":  "http://" + clashAddr,
+			// "dash":  "http://" + clashAddr,
 		}
 		newURLs := map[string]string{}
 		var procs []*managedProcess

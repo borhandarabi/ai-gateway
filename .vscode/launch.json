@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Package",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${file}",
+            "buildFlags": "-buildvcs=false",
+            "env": {
+                "SINGBOX_PATH": "C:\\Users\\Borhan\\Downloads\\ai-gateway\\sing\\sing-box.exe"
+            }
+        }
+    ]
+}
