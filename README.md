@@ -148,7 +148,7 @@ insurance for the remaining Go/Node builds.
 | `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
 | `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
 | `FLARESOLVERR_PORT` | `8191`   | FlareSolverr sidecar port (host-mapped).                                   |
-| `FLARESOLVERR_PROXY_URL` | `socks5://ai-gateway:7890` | Routes FlareSolverr's browser traffic through the sing-box tunnel. |
+| `FLARESOLVERR_PROXY_PORT` | `2006`   | FlareSolverr sidecar port (host-mapped).                                   |
 | `FLARESOLVERR_CAPTCHA_SOLVER` | `none` | FlareSolverr captcha-solver adapter name (see upstream docs).       |
 
 ## Open items (explicitly unresolved — do not treat as done)
