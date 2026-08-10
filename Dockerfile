@@ -27,6 +27,7 @@
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
 
 #     --build-context grok2api_src=https://github.com/chenyme/grok2api.git#main \
+#     --build-context flaresolverr_src=https://github.com/Rorqualx/flaresolverr-go.git#main \
 #     --build-context zai_src=<ZAI_REPO_URL>#<ZAI_REF>   \
 #     -t ai-gateway:latest .
 #
@@ -83,6 +84,14 @@ RUN go mod edit -go=1.26
 RUN go mod tidy
 # Build the entire package (not just main.go) to include proxy.go and chat.go
 RUN go build -o /out/deepseek-proxy .
+
+# ───────────────────────── flaresolverr-go (Go) ───────────────────────────
+FROM golang:1.26-alpine AS flaresolverr-builder
+WORKDIR /src
+# Source code will be provided via --build-context flaresolverr_src=...
+COPY --from=flaresolverr_src . .
+RUN go mod download
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/flaresolverr ./cmd/flaresolverr
 
 # ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
 FROM node:22-alpine AS grok2api-frontend-builder
@@ -198,6 +207,7 @@ RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates iptables iproute2 curl bash xz-utils musl \
+       chromium xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz /tmp/s6-noarch.tar.xz
@@ -231,6 +241,8 @@ COPY glm/tokens.sqlite /data/zai/tokens.sqlite
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy
 
+COPY --from=flaresolverr-builder /out/flaresolverr /opt/flaresolverr/flaresolverr
+
 COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
 COPY --from=grok2api-frontend-builder /src/frontend/dist /opt/grok2api/frontend/dist
 COPY --from=grok2api_src VERSION /opt/grok2api/VERSION
@@ -254,11 +266,15 @@ RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/
 # user (dropped to by its entrypoint via su-exec) -- replicate that user here
 # so the entrypoint's su-exec step has a real target to drop into.
 RUN groupadd -g 10001 grok2api \
-    && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api
+    && useradd -u 10001 -g grok2api -M -s /usr/sbin/nologin grok2api \
+    && groupadd -g 10002 flaresolverr \
+    && useradd -u 10002 -g flaresolverr -M -s /usr/sbin/nologin flaresolverr
 
-RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box \
+RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache \
     && chown -R node:node /data/omniroute \
-    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api
+    && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
+    && chown -R flaresolverr:flaresolverr /data/flaresolverr /opt/flaresolverr /tmp/rod /home/flaresolverr \
+    && chmod 1777 /tmp/.X11-unix
 
 # default (overridable) network-bind mode: 0.0.0.0 unless TUNNEL_ONLY kicks in at runtime
 RUN mkdir -p /run/s6/container_environment \
@@ -278,9 +294,10 @@ ENV OMNIROUTE_PORT=20128 \
     ZAI_AGENT_MODE=true \
     ZAI_LOG_LEVEL=info \
     ZAI_LOG_FORMAT=text \
-    SINGBOX_VERSION=${SINGBOX_VERSION}
+    SINGBOX_VERSION=${SINGBOX_VERSION} \
+    FLARESOLVERR_PORT=8191
 
-EXPOSE 20128 3000 3001 3002 8000 9090 7890
+EXPOSE 20128 3000 3001 3002 8000 8191 9090 7890
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
