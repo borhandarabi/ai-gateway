@@ -131,12 +131,14 @@ var managedEnvDefaults = map[string]string{
 	"ZAI_PORT":                 "3001",
 	"GROK2API_PORT":            "3004",
 	"FLARESOLVERR_PORT":        "8191",
-	"FLARESOLVERR_PROXY_PORT":  "2006",
+	"FLARESOLVERR_PROXY_PORT":  "8190",
 	"MIMO_PROXY_PORT":          "2003",
 	"KIMI_PROXY_PORT":          "2002",
 	"DEEPSEEK_PROXY_PORT":      "2005",
 	"ZAI_PROXY_PORT":           "2001",
 	"GROK2API_PROXY_PORT":      "2004",
+	"QWEN2API_PROXY_PORT":      "2006",
+	"QWEN2API_PORT":            "3006",
 }
 
 // backupEnvKeys کلیدهای پیکربندی بکاپ/بازیابی هستند. عمداً از همان مکانیزم
@@ -3006,8 +3008,8 @@ type CloudflareConfig struct {
 }
 
 type AppState struct {
-	DefaultWarpGroup string `json:"default_warp_group"`
-	GlobalWarpEndpoint string `json:"global_warp_endpoint,omitempty"`
+	DefaultWarpGroup    string   `json:"default_warp_group"`
+	GlobalWarpEndpoint  string   `json:"global_warp_endpoint,omitempty"`
 	BackupWarpEndpoints []string `json:"backup_warp_endpoints,omitempty"`
 	// AdminToken در صورت تنظیم از صفحه‌ی Settings، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	AdminToken string `json:"admin_token,omitempty"`
@@ -3432,7 +3434,8 @@ func bootstrapFreshInstall() {
 		{Name: "deepseek", ListenPort: getEnvIntDefault("DEEPSEEK_LISTEN_PORT", 3005), ProxyPort: getEnvIntDefault("DEEPSEEK_PROXY_PORT", 2005)},
 		{Name: "zai", ListenPort: getEnvIntDefault("ZAI_LISTEN_PORT", 3001), ProxyPort: getEnvIntDefault("ZAI_PROXY_PORT", 2001)},
 		{Name: "grok2api", ListenPort: getEnvIntDefault("GROK2API_LISTEN_PORT", 3004), ProxyPort: getEnvIntDefault("GROK2API_PROXY_PORT", 2004)},
-		{Name: "flaresolverr", ListenPort: getEnvIntDefault("FLARESOLVERR_PORT", 8191), ProxyPort: getEnvIntDefault("FLARESOLVERR_PROXY_PORT", 2006)},
+		{Name: "qwen2api", ListenPort: getEnvIntDefault("QWEN2API_PORT", 3006), ProxyPort: getEnvIntDefault("QWEN2API_PROXY_PORT", 2006)},
+		{Name: "flaresolverr", ListenPort: getEnvIntDefault("FLARESOLVERR_PORT", 8191), ProxyPort: getEnvIntDefault("FLARESOLVERR_PROXY_PORT", 8190)},
 	}
 	// Add user-defined default services
 	for _, svc := range parseDefaultServices() {
@@ -4589,9 +4592,9 @@ func getGlobalWarpEndpoint() string {
 }
 
 func groupPrefixForTag(tag string) (prefix string, grouped bool) {
-    if strings.HasPrefix(tag, "WARP-") {
-        return "WARP", true
-    }
+	if strings.HasPrefix(tag, "WARP-") {
+		return "WARP", true
+	}
 	return tag, false
 }
 
@@ -4860,7 +4863,6 @@ func GenerateWireGuardConfigs(prefix string, account *WarpAccount, endpoints []s
 // است. راه‌حل قابل‌اعتماد: چون لیست warpEndpoints ثابت و از قبل شناخته‌شده است،
 // برای هر تگ، طولانی‌ترین پسوند شناخته‌شده‌ی منطبق را پیدا می‌کنیم؛ باقیمانده
 // همان prefix/گروه است. این هم روی تگ‌های تازه و هم روی نمونه‌های قدیمی کار می‌کند.
-
 
 // ---------------------------------------------------------------------
 // رندر / اعتبارسنجی / persist کانفیگ (بازنویسی کامل و اصلاح‌شده)
@@ -7952,17 +7954,29 @@ func pingCurrentWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 			peer := map[string]interface{}{"address": host, "port": port}
 			if peers, ok := sampleWarp["peers"].([]interface{}); ok && len(peers) > 0 {
 				if p, ok := peers[0].(map[string]interface{}); ok {
-					if val, ok := p["public_key"]; ok { peer["public_key"] = val }
-					if val, ok := p["allowed_ips"]; ok { peer["allowed_ips"] = val }
-					if val, ok := p["reserved"]; ok { peer["reserved"] = val }
+					if val, ok := p["public_key"]; ok {
+						peer["public_key"] = val
+					}
+					if val, ok := p["allowed_ips"]; ok {
+						peer["allowed_ips"] = val
+					}
+					if val, ok := p["reserved"]; ok {
+						peer["reserved"] = val
+					}
 				}
 			}
 			ob := map[string]interface{}{
 				"type": "wireguard", "tag": "WARP_CUR_TEST", "peers": []interface{}{peer},
 			}
-			if val, ok := sampleWarp["address"]; ok { ob["address"] = val }
-			if val, ok := sampleWarp["private_key"]; ok { ob["private_key"] = val }
-			if val, ok := sampleWarp["mtu"]; ok { ob["mtu"] = val }
+			if val, ok := sampleWarp["address"]; ok {
+				ob["address"] = val
+			}
+			if val, ok := sampleWarp["private_key"]; ok {
+				ob["private_key"] = val
+			}
+			if val, ok := sampleWarp["mtu"]; ok {
+				ob["mtu"] = val
+			}
 
 			cfg := map[string]interface{}{
 				"endpoints": []interface{}{ob},
@@ -7983,15 +7997,21 @@ func pingCurrentWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 				cmd := exec.Command(singboxBin, "run", "-c", tmpFile)
 				if err := cmd.Start(); err == nil {
 					defer func() {
-						if cmd.Process != nil { cmd.Process.Kill() }
+						if cmd.Process != nil {
+							cmd.Process.Kill()
+						}
 					}()
 					time.Sleep(2 * time.Second)
 					testReqURL := "http://127.0.0.1:9096/proxies/test_urltest/delay?timeout=3000&url=http://cp.cloudflare.com/generate_204"
-					if testResp, err := http.Get(testReqURL); err == nil { testResp.Body.Close() }
+					if testResp, err := http.Get(testReqURL); err == nil {
+						testResp.Body.Close()
+					}
 					if resp, err := http.Get("http://127.0.0.1:9096/proxies"); err == nil {
 						var apiResp struct {
 							Proxies map[string]struct {
-								History []struct { Delay int `json:"delay"` } `json:"history"`
+								History []struct {
+									Delay int `json:"delay"`
+								} `json:"history"`
 							} `json:"proxies"`
 						}
 						_ = json.NewDecoder(resp.Body).Decode(&apiResp)
@@ -7999,8 +8019,8 @@ func pingCurrentWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 						if p, ok := apiResp.Proxies["WARP_CUR_TEST"]; ok && len(p.History) > 0 {
 							if p.History[len(p.History)-1].Delay > 0 {
 								curItem = &WarpScanItem{
-									Endpoint: ep,
-									Delay: p.History[len(p.History)-1].Delay,
+									Endpoint:  ep,
+									Delay:     p.History[len(p.History)-1].Delay,
 									IsDefault: ep == "engage.cloudflareclient.com:2408",
 								}
 							}
@@ -8103,6 +8123,7 @@ func resetWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 		"endpoint": ep,
 	})
 }
+
 // ---------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------
@@ -9521,9 +9542,15 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 			"port":    port,
 		}
 		if peerTemplate != nil {
-			if val, ok := peerTemplate["public_key"]; ok { peer["public_key"] = val }
-			if val, ok := peerTemplate["allowed_ips"]; ok { peer["allowed_ips"] = val }
-			if val, ok := peerTemplate["reserved"]; ok { peer["reserved"] = val }
+			if val, ok := peerTemplate["public_key"]; ok {
+				peer["public_key"] = val
+			}
+			if val, ok := peerTemplate["allowed_ips"]; ok {
+				peer["allowed_ips"] = val
+			}
+			if val, ok := peerTemplate["reserved"]; ok {
+				peer["reserved"] = val
+			}
 		}
 
 		ob := map[string]interface{}{
@@ -9532,9 +9559,15 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 			"peers": []interface{}{peer},
 		}
 
-		if val, ok := sampleWarp["address"]; ok { ob["address"] = val }
-		if val, ok := sampleWarp["private_key"]; ok { ob["private_key"] = val }
-		if val, ok := sampleWarp["mtu"]; ok { ob["mtu"] = val }
+		if val, ok := sampleWarp["address"]; ok {
+			ob["address"] = val
+		}
+		if val, ok := sampleWarp["private_key"]; ok {
+			ob["private_key"] = val
+		}
+		if val, ok := sampleWarp["mtu"]; ok {
+			ob["mtu"] = val
+		}
 
 		endpointNodes = append(endpointNodes, ob)
 	}
@@ -9596,7 +9629,7 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 
 	var apiResp struct {
 		Proxies map[string]struct {
-			Now     string `json:"now"`
+			Now     string   `json:"now"`
 			All     []string `json:"all"`
 			History []struct {
 				Time  string `json:"time"`

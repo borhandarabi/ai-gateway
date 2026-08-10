@@ -23,13 +23,16 @@ services:
     env_file:
       - .env
     ports:
-      - "20128:20128"   # OmniRoute
-      - "3001:3001"     # MimoApi
-      - "3002:3002"     # zai-api / GlmApi
-      - "3005:3005"     # DeepSeekApi
-      - "8000:8000"     # grok2api-go
-      - "9090:9090"     # mihomo Clash API
-      - "7890:7890"     # mihomo mixed-port (SOCKS/HTTP)
+      - "${PROXY_PORT:-80}:${PROXY_PORT:-80}" # General Reverse Proxy
+      - "${OMNIROUTE_PORT:-20128}:${OMNIROUTE_PORT:-20128}"   # OmniRoute
+      - "${MIMO_PORT:-3001}:${MIMO_PORT:-3001}"     # MimoApi
+      - "${ZAI_PORT:-3002}:${ZAI_PORT:-3002}"     # zai-api / GlmApi
+      - "${DEEPSEEK_PORT:-3005}:${DEEPSEEK_PORT:-3005}"     # DeepSeekApi
+      - "${GROK2API_PORT:-3004}:${GROK2API_PORT:-3004}"
+      - "${QWEN2API_PORT:-3006}:${QWEN2API_PORT:-3006}"
+      - "${CLASH_API_PORT:-9090}:${CLASH_API_PORT:-9090}"
+      - "${MIXED_PORT:-7890}:${MIXED_PORT:-7890}"
+      - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"     # mihomo mixed-port (SOCKS/HTTP)
     volumes:
       - omniroute_data:/data/omniroute
       - mimo_data:/data/mimo
@@ -48,5 +51,7 @@ volumes:
   mimo_data:
   zai_data:
   grok2api_data:
+  qwen2api_data:
+  singbox_data:
   mihomo_data:
   flaresolverr_config:
