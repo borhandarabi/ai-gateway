@@ -9,6 +9,7 @@ services:
         zai_src: ${ZAI_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
         deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
+        qwen2api_src: ${QWEN2API_REPO:-https://github.com/XxxXTeam/Qwen2API_Go.git#main}
         flaresolverr_src: "${FLARESOLVERR_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}

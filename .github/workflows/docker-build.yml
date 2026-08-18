@@ -92,6 +92,7 @@ jobs:
             zai_src=${{ env.ZAI_REPO }}
             kimi_src=${{ env.KIMI_REPO }}
             deepseek_src=${{ env.DEEPSEEK_REPO }}
+            qwen2api_src=${{ env.QWEN2API_REPO }}
             flaresolverr_src=${{ env.FLARESOLVERR_REPO }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
