@@ -73,11 +73,6 @@ var (
 	// مسیر (/name/...) و پنل مدیریت را روی "/" سرو می‌کند.
 	proxyPort = getEnvDefault("PROXY_PORT", "80")
 
-	// توکن مدیریتی اختیاری. اگر خالی باشد API بدون احراز هویت است (فقط برای dev/local).
-	// می‌تواند بعداً از داخل UI (صفحه‌ی Settings) نیز تغییر و در state.json ذخیره شود.
-	adminToken   = os.Getenv("ADMIN_TOKEN")
-	adminTokenMu sync.RWMutex
-
 	// قفل عملیات فایل/کانفیگ (read-write): نوشتن‌ها Lock می‌گیرند، خواندن‌ها RLock.
 	mu sync.RWMutex
 
@@ -249,7 +244,9 @@ func settingsMethodRouter(getHandler, postHandler http.HandlerFunc) http.Handler
 	}
 }
 
-// requireAuth در صورتی که ADMIN_TOKEN تنظیم شده باشد، هدر X-Admin-Token (یا query param token) را بررسی می‌کند.
+// requireAuth در صورتی که CLASH_SECRET تنظیم شده باشد، هدر X-Admin-Token (یا query param token) را بررسی می‌کند.
+// یک کلید واحد (CLASH_SECRET) هم API مدیریتی خودِ این برنامه و هم Clash API خودِ
+// sing-box را محافظت می‌کند — عمداً دو کلید جداگانه (ADMIN_TOKEN/CLASH_SECRET) نداریم.
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if tok := getAdminToken(); tok != "" {
@@ -266,24 +263,19 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// getAdminToken/setAdminToken دسترسی امن (thread-safe) به توکن مدیریتی را فراهم می‌کنند
-// تا هم درخواست‌های همزمان و هم تغییر آن از صفحه‌ی Settings بدون data race باشد.
+// getAdminToken مقدار فعلی CLASH_SECRET را برمی‌گرداند (از EnvOverrides ذخیره‌شده
+// در state.json، در غیر این صورت متغیر محیطی CLASH_SECRET). چون همین مقدار همان
+// چیزی است که در experimental.clash_api.secret به sing-box هم داده می‌شود، با
+// تنظیم یک کلید هم API مدیریتی و هم Clash API محافظت می‌شوند.
 func getAdminToken() string {
-	adminTokenMu.RLock()
-	defer adminTokenMu.RUnlock()
-	return adminToken
+	return getSetting("CLASH_SECRET", "")
 }
 
-// setAdminToken توکن را در حافظه به‌روزرسانی و در state.json ذخیره می‌کند تا پس از
-// ری‌استارت مدیر نیز باقی بماند (و بر متغیر محیطی ADMIN_TOKEN اولویت پیدا کند).
+// setAdminToken معادل تنظیم CLASH_SECRET از صفحه‌ی Settings است؛ به همان مسیر
+// EnvOverrides می‌نویسد که getSetting/setSetting برای همه‌ی کلیدهای مدیریت‌شده
+// از UI استفاده می‌کنند — تا با «Advanced (environment) settings» هم یکپارچه بماند.
 func setAdminToken(token string) error {
-	adminTokenMu.Lock()
-	adminToken = token
-	adminTokenMu.Unlock()
-
-	state := readStateOrDefault()
-	state.AdminToken = token
-	return writeState(state)
+	return setSetting("CLASH_SECRET", token)
 }
 
 const htmlContent = `<!DOCTYPE html>
@@ -606,7 +598,7 @@ const htmlContent = `<!DOCTYPE html>
 <div id="loginOverlay" style="display:none;">
   <div class="panel">
     <h2>Connect to Clash API</h2>
-    <p class="sub">Needed only for live node switching on the Services tab.</p>
+    <p class="sub">The secret you enter here (CLASH_SECRET) also authenticates this panel's own management API — one secret for both.</p>
     <form id="loginForm" onsubmit="event.preventDefault(); login();">
       <div class="field">
         <label for="controllerInput">External controller address</label>
@@ -977,16 +969,17 @@ const htmlContent = `<!DOCTYPE html>
         </div>
 
         <div class="panel">
-          <h2>Admin token</h2>
-          <p class="sub">Required as the <code>X-Admin-Token</code> header (or <code>?token=</code> query param) on every <code>/api/*</code> request. Leave empty to disable authentication — only do this on a trusted local network.</p>
+          <h2>Access secret (CLASH_SECRET)</h2>
+          <p class="sub">A single secret protects both the Clash API (used by dashboards like this one and metacubexd) and this management API's <code>/api/*</code> endpoints (sent as the <code>X-Admin-Token</code> header or <code>?token=</code> query param). There is intentionally no separate admin token — set this one value and it covers both. Leave empty to disable authentication on both — only do this on a trusted local network.</p>
           <div id="adminTokenStatus" class="row" style="margin-bottom:14px;"></div>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
-              <label for="newAdminToken">New token <span class="hint">(min. 8 characters, or empty to disable)</span></label>
+              <label for="newAdminToken">New secret <span class="hint">(min. 8 characters, or empty to disable)</span></label>
               <input type="password" id="newAdminToken" placeholder="Leave empty to disable authentication" autocomplete="new-password">
             </div>
             <button class="btn btn-primary" onclick="saveAdminToken()">Save</button>
           </div>
+          <p class="sub" style="margin-top:10px;">This updates the same <code>CLASH_SECRET</code> value shown under Advanced (environment) settings below — changing it here or there has the same effect.</p>
         </div>
 
         <div class="panel">
@@ -1317,6 +1310,21 @@ const htmlContent = `<!DOCTYPE html>
     return fetch(controllerBase + path, Object.assign({}, options, { headers: headers }));
   }
 
+  // -----------------------------------------------------------------
+  // This manager's own /api/* endpoints (requireAuth) are protected by the
+  // SAME secret as the Clash API above (CLASH_SECRET) — there is no separate
+  // admin token. apiFetch() attaches it as X-Admin-Token on every call, and
+  // routes an expired/invalid secret back to the single login screen.
+  // -----------------------------------------------------------------
+  function apiFetch(path, options){
+    options = options || {};
+    var headers = Object.assign({}, secret ? { 'X-Admin-Token': secret } : {}, options.headers || {});
+    return fetch(path, Object.assign({}, options, { headers: headers })).then(function(res){
+      if (res.status === 401) clearCreds();
+      return res;
+    });
+  }
+
   async function showLoginOverlay() {
     try {
       var base = await resolvePublicBaseUrl();
@@ -1471,7 +1479,7 @@ const htmlContent = `<!DOCTYPE html>
   // Generic API helper
   // -----------------------------------------------------------------
   async function api(endpoint, body){
-    var res = await fetch(endpoint, {
+    var res = await apiFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {})
@@ -1498,7 +1506,7 @@ const htmlContent = `<!DOCTYPE html>
   // -----------------------------------------------------------------
   async function loadStatus(){
     try {
-      var res = await fetch('/api/status');
+      var res = await apiFetch('/api/status');
       var data = await res.json();
       var dot = document.getElementById('statusDot');
       var text = document.getElementById('statusText');
@@ -1626,7 +1634,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadConfigsAndDerived(){
     try {
-      var res = await fetch('/api/get_configs');
+      var res = await apiFetch('/api/get_configs');
       var data = await res.json();
       // Always keep the plain textareas in sync so CodeMirror picks up the
       // right content whenever it's lazily initialized on the Raw Config page.
@@ -1841,7 +1849,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadWarpGroups(){
     try {
-      var res = await fetch('/api/warp_groups');
+      var res = await apiFetch('/api/warp_groups');
       var data = await res.json();
       lastWarpData = data;
       document.getElementById('countWarp').textContent = (data.groups || []).length;
@@ -1925,7 +1933,7 @@ const htmlContent = `<!DOCTYPE html>
   // -----------------------------------------------------------------
   async function loadOutbounds(){
     try {
-      var res = await fetch('/api/outbounds');
+      var res = await apiFetch('/api/outbounds');
       var data = await res.json();
       var list = data.outbounds || [];
       var countEl = document.getElementById('countOutbounds');
@@ -2015,7 +2023,7 @@ const htmlContent = `<!DOCTYPE html>
   async function loadS6Services(){
     var note = document.getElementById('s6UnavailableNote');
     try {
-      var res = await fetch('/api/s6/services');
+      var res = await apiFetch('/api/s6/services');
       var data = await res.json();
       if (!res.ok){
         if (note){ note.style.display = 'block'; note.textContent = data.error || 'Failed to load services'; }
@@ -2430,7 +2438,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadWarpEndpoint() {
     try {
-      var res = await fetch('/api/warp/endpoint');
+      var res = await apiFetch('/api/warp/endpoint');
       var data = await res.json();
       var el = document.getElementById('globalWarpEndpoint');
       if (el) el.textContent = data.endpoint || 'Not set';
@@ -2811,7 +2819,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadSingboxInfo(){
     try {
-      var res = await fetch('/api/singbox/info');
+      var res = await apiFetch('/api/singbox/info');
       var data = await res.json();
       var box = document.getElementById('singboxInfo');
       box.innerHTML = '';
@@ -2861,7 +2869,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadCloudflareSettings(){
     try {
-      var res = await fetch('/api/cloudflare/settings');
+      var res = await apiFetch('/api/cloudflare/settings');
       var data = await res.json();
       var box = document.getElementById('cfStatus');
       box.innerHTML = '';
@@ -2932,7 +2940,7 @@ const htmlContent = `<!DOCTYPE html>
   var cfInfoPromise = null;
   function getCloudflareInfo(){
     if (!cfInfoPromise){
-      cfInfoPromise = fetch('/api/cloudflare/settings').then(function(r){ return r.json(); }).catch(function(){ return {}; });
+      cfInfoPromise = apiFetch('/api/cloudflare/settings').then(function(r){ return r.json(); }).catch(function(){ return {}; });
     }
     return cfInfoPromise;
   }
@@ -2940,7 +2948,7 @@ const htmlContent = `<!DOCTYPE html>
   var settingsPromise = null;
   function getSettingsInfo(){
     if (!settingsPromise){
-      settingsPromise = fetch('/api/settings').then(function(r){ 
+      settingsPromise = apiFetch('/api/settings').then(function(r){ 
         if (!r.ok) throw new Error('API error');
         return r.json(); 
       }).catch(function(err){ 
@@ -3013,7 +3021,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadSubscriptions(){
     try {
-      var res = await fetch('/api/subscriptions');
+      var res = await apiFetch('/api/subscriptions');
       var data = await res.json();
       var body = document.getElementById('subscriptionsBody');
       if (!body) return;
@@ -3120,7 +3128,7 @@ const htmlContent = `<!DOCTYPE html>
   };
   async function loadEnvSettings(){
     try {
-      var res = await fetch('/api/settings/env');
+      var res = await apiFetch('/api/settings/env');
       var data = await res.json();
       var box = document.getElementById('envSettingsBody');
       if (!box) return;
@@ -3237,7 +3245,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function loadBackupSettings(){
     try {
-      var res = await fetch('/api/backup/settings');
+      var res = await apiFetch('/api/backup/settings');
       var data = await res.json();
 
       document.getElementById('bkExtraPaths').value = (data.paths_extra || []).join(',');
@@ -3559,8 +3567,8 @@ type AppState struct {
 	// heuristic (پیشوند "WARP-") پوشش داده می‌شوند تا نصب‌های قبلی بدون migration
 	// دستی همچنان درست کار کنند.
 	NodeGroups map[string]string `json:"node_groups,omitempty"`
-	// AdminToken در صورت تنظیم از صفحه‌ی Settings، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
-	AdminToken string `json:"admin_token,omitempty"`
+	// توکن مدیریتی جدا دیگر نگه‌داری نمی‌شود؛ CLASH_SECRET (در EnvOverrides زیر)
+	// هم API مدیریتی و هم Clash API را محافظت می‌کند — نگاه کنید به getAdminToken.
 	// Cloudflare تنظیمات تونل (هر سه حالت) را نگه می‌دارد.
 	Cloudflare CloudflareConfig `json:"cloudflare,omitempty"`
 	// DockerServices برای سازگاری با نسخه‌های قبل نگه‌داشته شده است و در
@@ -7753,8 +7761,10 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// updateAdminTokenHandler توکن مدیریتی را از داخل UI تغییر می‌دهد. مقدار خالی
-// احراز هویت را غیرفعال می‌کند (فقط برای شبکه‌ی محلی/قابل‌اعتماد).
+// updateAdminTokenHandler مقدار CLASH_SECRET را از داخل UI تغییر می‌دهد (دقیقاً
+// همان مسیر setSetting که کلید "Advanced (environment) settings" هم استفاده
+// می‌کند). مقدار خالی احراز هویت هر دو API (مدیریتی و Clash) را غیرفعال می‌کند
+// (فقط برای شبکه‌ی محلی/قابل‌اعتماد).
 func updateAdminTokenHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		NewToken string `json:"new_token"`
@@ -7765,21 +7775,21 @@ func updateAdminTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimSpace(req.NewToken)
 	if token != "" && len(token) < 8 {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Token must be at least 8 characters (or empty to disable authentication)"})
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Secret must be at least 8 characters (or empty to disable authentication)"})
 		return
 	}
 	if err := setAdminToken(token); err != nil {
 		log.Printf("updateAdminTokenHandler: failed to persist state.json: %v", err)
-		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save token: " + err.Error()})
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save secret: " + err.Error()})
 		return
 	}
 	if token == "" {
-		log.Println("⚠️  ADMIN_TOKEN از UI پاک شد — API مدیریت اکنون بدون احراز هویت است.")
-		jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Admin token cleared — the management API is now unauthenticated. Only do this on a trusted local network."})
+		log.Println("⚠️  CLASH_SECRET از UI پاک شد — هم Clash API و هم API مدیریت اکنون بدون احراز هویت‌اند.")
+		jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Secret cleared — the Clash API and management API are now both unauthenticated. Only do this on a trusted local network."})
 		return
 	}
-	log.Println("🔒 ADMIN_TOKEN از صفحه‌ی Settings به‌روزرسانی شد.")
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Admin token updated"})
+	log.Println("🔒 CLASH_SECRET از صفحه‌ی Settings به‌روزرسانی شد (هم Clash API و هم API مدیریت را محافظت می‌کند).")
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Secret updated"})
 }
 
 // singboxInfoHandler اطلاعات نسخه/مسیر باینری sing-box شناسایی‌شده روی سیستم را برمی‌گرداند.
@@ -10703,10 +10713,9 @@ func main() {
 	apiPort = ":" + strings.TrimPrefix(getSetting("API_PORT", strings.TrimPrefix(apiPort, ":")), ":")
 	proxyPort = getSetting("PROXY_PORT", proxyPort)
 
-	// اگر قبلاً از صفحه‌ی Settings توکنی ذخیره شده باشد، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
-	if persisted := readStateOrDefault().AdminToken; persisted != "" {
-		adminToken = persisted
-	}
+	// اگر قبلاً از صفحه‌ی Settings مقدار CLASH_SECRET تغییر کرده باشد، در
+	// envOverridesCache (که در ادامه با loadEnvOverridesCache بارگذاری می‌شود)
+	// نگه‌داری می‌شود؛ getAdminToken/getSetting همیشه از همان‌جا می‌خوانند.
 
 	// بررسی و اعمال بازیابی خودکار: اگر /data و /app/data خالی‌اند و بکاپ قبلی
 	// در دسترس است، همین‌جا (قبل از ساخت فایل‌های پیش‌فرض/استارت sing-box)
@@ -10723,9 +10732,9 @@ func main() {
 	startBackupScheduler()
 
 	if getAdminToken() == "" {
-		log.Println("⚠️  ADMIN_TOKEN تنظیم نشده — API مدیریت بدون احراز هویت است. چون پنل حالا از طریق reverse proxy عمومی (پورت " + proxyPort + ") هم در دسترس است، این را قبل از فعال‌کردن هر تونلی از صفحه‌ی Settings یا با export ADMIN_TOKEN=... ست کنید.")
+		log.Println("⚠️  CLASH_SECRET تنظیم نشده — هم Clash API و هم API مدیریت این پنل بدون احراز هویت‌اند. چون پنل حالا از طریق reverse proxy عمومی (پورت " + proxyPort + ") هم در دسترس است، این را قبل از فعال‌کردن هر تونلی از صفحه‌ی Settings یا با export CLASH_SECRET=... ست کنید.")
 	} else {
-		log.Println("🔒 API مدیریت با ADMIN_TOKEN محافظت می‌شود.")
+		log.Println("🔒 API مدیریت و Clash API هر دو با CLASH_SECRET محافظت می‌شوند.")
 	}
 	if bindAddr == "0.0.0.0" || bindAddr == "" {
 		log.Println("⚠️  BIND_ADDR روی تمام اینترفیس‌ها گوش می‌دهد. برای دسترسی فقط-لوکال از BIND_ADDR=127.0.0.1 استفاده کنید.")
