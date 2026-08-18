@@ -289,7 +289,7 @@ RUN groupadd -g 10001 grok2api \
     && groupadd -g 10003 qwen2api \
     && useradd -u 10003 -g qwen2api -M -s /usr/sbin/nologin qwen2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api \
+RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
     && chown -R node:node /data/omniroute \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && chown -R flaresolverr:flaresolverr /data/flaresolverr /opt/flaresolverr /tmp/rod /home/flaresolverr \
