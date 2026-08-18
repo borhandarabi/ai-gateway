@@ -10,20 +10,17 @@ export LOG_LEVEL="${ZAI_LOG_LEVEL:-info}"
 export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
 
 
-export HTTP_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
-export HTTPS_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
-export ALL_PROXY="socks5h://127.0.0.1:${ZAI_PROXY:-2001}"
-export NO_PROXY="localhost,127.0.0.1"
+export PROXY_SERVER_URL="socks5h://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
+export PROXY_COLLECTOR_URL="socks5h://127.0.0.1:${ZAI_COLLECTOR_PROXY_PORT:-2007}"
 
 # If no tokens database exists, generate one first.
 # NOTE: token-collector is the actual binary (not token-generator).
 # We must NOT use exec here because we need to copy the result afterwards.
 if [ ! -f /data/zai/tokens.sqlite ]; then
     echo "[zai-api] No tokens.sqlite found, generating tokens..."
-    ./token-collector --tokens 750 --batch 1 --no-tui --parallel 1
-    cp -rf ./tokens.sqlite /data/zai/tokens.sqlite
+    ./zai-api --tokens 750 --batch 1 --no-tui --parallel 1 --db-path="/data/zai/tokens.sqlite"
 fi
 
 # AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
 # this in production, do not rely on the default.
-exec ./zai-api --agent-mode --db-path=/data/zai/tokens.sqlite
+exec ./zai-api --agent-mode --db-path="/data/zai/tokens.sqlite"

@@ -29,7 +29,7 @@
 #     --build-context grok2api_src=https://github.com/chenyme/grok2api.git#main \
 #     --build-context flaresolverr_src=https://github.com/Rorqualx/flaresolverr-go.git#main \
 #     --build-context qwen2api_src=https://github.com/XxxXTeam/Qwen2API_Go.git#main \
-#     --build-context zai_src=<ZAI_REPO_URL>#<ZAI_REF>   \
+#     --build-context zai_src=https://github.com/borhandarabi/GLM-Free-API.git#main \
 #     -t ai-gateway:latest .
 #
 # See build.sh / .github/workflows/docker-build.yml for the wired-up version.
@@ -55,13 +55,11 @@ FROM golang:1.26-alpine AS zai-builder
 WORKDIR /src
 COPY --from=zai_src . .
 RUN apk add --no-cache git gcc musl-dev
-RUN go mod init zai-api
+# RUN go mod init zai-api
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
 RUN go mod tidy
-# captcha.go is build-only (compiled for availability, never auto-run).
-RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/token-collector captcha.go
 # main.go is the actual service entry point.
-RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api main.go
+RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api .
 
 # ─────────────────────────── Kimi-api (Go) ──────────────────────────
 FROM golang:1.26-alpine AS kimi-builder
@@ -253,8 +251,6 @@ COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=zai-builder /out/zai-api /opt/zai/zai-api
-COPY --from=zai-builder /out/token-collector /opt/zai/token-collector
-COPY glm/tokens.sqlite /data/zai/tokens.sqlite
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy

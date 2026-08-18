@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -417,13 +418,57 @@ const htmlContent = `<!DOCTYPE html>
   .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:150px;}
   .field label{font-size:12px;color:var(--text-muted);font-weight:500;}
   .field .hint{font-size:11px;color:var(--text-dim);}
-  input[type=text],input[type=number],input[type=password]{
+  
+  /* Inputs & Selects */
+  input[type=text],input[type=number],input[type=password],select.input{
     background:var(--surface-2);border:1px solid var(--border);color:var(--text);
     border-radius:var(--radius-sm);padding:9px 11px;font-size:13.5px;outline:none;
-    transition:border-color .12s,background .12s;
+    transition:border-color .12s,background .12s,box-shadow .12s;
   }
-  input:focus{border-color:var(--accent);background:#141a27;}
+  select.input {
+    appearance: none; -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b93a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
+    padding-right: 32px;
+  }
+  input[type=text]:focus,input[type=number]:focus,input[type=password]:focus,select.input:focus{
+    border-color:var(--accent);background:#141a27;box-shadow:0 0 0 2px var(--accent-soft);
+  }
   input::placeholder{color:var(--text-dim);}
+
+  /* Checkboxes & Radios */
+  input[type="checkbox"], input[type="radio"] {
+    appearance: none; -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    border-radius: 4px; outline: none; cursor: pointer;
+    transition: all 0.2s ease; display: inline-block;
+    vertical-align: middle; position: relative; margin: 0;
+  }
+  input[type="radio"] { border-radius: 50%; }
+  input[type="checkbox"]:checked, input[type="radio"]:checked {
+    background: var(--accent); border-color: var(--accent);
+  }
+  input[type="checkbox"]:checked::after {
+    content: ''; position: absolute; left: 5.5px; top: 2px;
+    width: 5px; height: 10px; border: solid white;
+    border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  input[type="radio"]:checked::after {
+    content: ''; position: absolute; left: 5px; top: 5px;
+    width: 6px; height: 6px; border-radius: 50%; background: white;
+  }
+  input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--accent-strong); }
+  input[type="checkbox"]:focus, input[type="radio"]:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
+  
+  .checkbox-group label {
+    display: flex !important; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer;
+    transition: background 0.15s; margin-bottom: 2px !important;
+  }
+  .checkbox-group label:hover { background: var(--surface-2); }
+  .checkbox-group input { margin-right: 0 !important; }
 
   .btn{
     display:inline-flex;align-items:center;justify-content:center;gap:7px;
@@ -599,6 +644,14 @@ const htmlContent = `<!DOCTYPE html>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18"/></svg>
         WARP Nodes <span class="count" id="countWarp">0</span>
       </button>
+      <button class="navitem" data-page="outbounds" onclick="showPage('outbounds')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 16v6M4.9 4.9l4.2 4.2M14.9 14.9l4.2 4.2M2 12h6M16 12h6M4.9 19.1l4.2-4.2M14.9 9.1l4.2-4.2"/></svg>
+        Outbounds <span class="count" id="countOutbounds">0</span>
+      </button>
+      <button class="navitem" data-page="s6" onclick="showPage('s6')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h.01M9 15h6M9 12h6"/></svg>
+        System Services <span class="count" id="countS6">0</span>
+      </button>
       <button class="navitem" data-page="dashboard" onclick="showPage('dashboard')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
         Dashboard
@@ -704,6 +757,10 @@ const htmlContent = `<!DOCTYPE html>
               <label for="warpRes">Reserved <span class="hint">(optional)</span></label>
               <input type="text" id="warpRes" placeholder="160,177,129">
             </div>
+            <div class="field">
+              <label for="warpDetour">Detour <span class="hint">(optional)</span></label>
+              <select id="warpDetour" class="input"><option value="">None (dial directly)</option></select>
+            </div>
             <button class="btn btn-primary" onclick="addWarp()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
               Create group
@@ -715,31 +772,6 @@ const htmlContent = `<!DOCTYPE html>
           <h2>Global WARP Endpoint</h2>
           <p class="sub">This endpoint (IP:Port) is applied to ALL WARP nodes. Choose a saved working endpoint or scan for new ones in real time.</p>
           
-          <div class="row" style="align-items:flex-end; margin-bottom:15px;">
-            <div class="field" style="flex:2;">
-              <label>Current Global Endpoint</label>
-              <div style="display:flex; gap:8px; align-items:center;">
-                <div id="globalWarpEndpoint" style="font-family: var(--font-mono); font-size: 14px; background: var(--bg-alt); padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--border); color: var(--text); flex:1;">Loading...</div>
-                <button class="btn btn-ghost btn-sm" onclick="quickTestCurrentEndpoint()" id="btnQuickTest" title="Test latency of current endpoint">
-                  ⚡ Quick Test (تست سریع)
-                </button>
-                <span id="quickTestResult" style="font-weight:bold; font-size:13px;"></span>
-              </div>
-            </div>
-            <button class="btn btn-danger" onclick="resetWarpEndpoint()">
-              Reset Default
-            </button>
-          </div>
-
-          <div class="row" style="align-items:flex-end; margin-bottom:15px; border-top: 1px solid var(--border); padding-top: 15px;">
-            <div class="field" style="flex:2;">
-              <label for="savedWarpDropdown">Saved Working Endpoints (تغییر سریع بدون اسکن مجدد)</label>
-              <select id="savedWarpDropdown" class="input" style="font-family: var(--font-mono);"></select>
-            </div>
-            <button class="btn btn-primary" onclick="applyDropdownWarpEndpoint()">
-              Apply Selected Saved
-            </button>
-          </div>
 
           <div class="row" style="align-items:flex-end; border-top: 1px solid var(--border); padding-top: 15px;">
             <div class="field">
@@ -772,9 +804,12 @@ const htmlContent = `<!DOCTYPE html>
                 <button class="btn btn-ghost btn-sm" id="btnStopScan" onclick="stopWarpScan()">
                   Pause/Stop
                 </button>
-                <button class="btn btn-primary btn-sm" onclick="applySelectedWarpEndpoint()">
-                  Apply Selected
-                </button>
+                <select id="scanSortBy" class="input" style="padding: 4px 8px; font-size: 12px; height: 30px;" onchange="sortScanResults()">
+                  <option value="delay_asc">Sort: Ping ⬆</option>
+                  <option value="delay_desc">Sort: Ping ⬇</option>
+                  <option value="ip_asc">Sort: IP ⬆</option>
+                  <option value="ip_desc">Sort: IP ⬇</option>
+                </select>
               </div>
             </div>
 
@@ -782,7 +817,9 @@ const htmlContent = `<!DOCTYPE html>
               <table class="data" style="margin:0;">
                 <thead>
                   <tr>
-                    <th style="width:50px; text-align:center;">Select</th>
+                    <th style="width:50px; text-align:center;">
+                      <input type="checkbox" id="selectAllScanCheckbox" onchange="toggleSelectAllScans(this.checked)" title="Select All / None">
+                    </th>
                     <th>Endpoint Address</th>
                     <th>Ping (Latency)</th>
                     <th>Status / Source</th>
@@ -792,9 +829,17 @@ const htmlContent = `<!DOCTYPE html>
               </table>
             </div>
 
-            <button class="btn btn-primary" onclick="applySelectedWarpEndpoint()">
-              Apply Selected Endpoint
-            </button>
+            <div id="warpApplyGroupRow" class="row" style="align-items:flex-end; margin-top:15px; border-top: 1px solid var(--border); padding-top: 15px; display: none;">
+              <div class="field" style="flex:2;">
+                <label>Groups <span class="hint">(انتخاب گروه‌ها جهت اعمال مقادیر تیک‌خورده)</span></label>
+                <div id="warpGroupCheckboxes" class="checkbox-group" style="max-height: 150px; overflow-y: auto; border: 1px solid var(--border); padding: 10px; border-radius: var(--radius); background: var(--bg);">
+                  <!-- Checkboxes populated via JS -->
+                </div>
+              </div>
+              <button class="btn btn-primary" id="btnApplyToGroup" onclick="applySelectionToGroup()" disabled>
+                Apply selected to Group
+              </button>
+            </div>
           </div>
         </div>
 
@@ -807,6 +852,84 @@ const htmlContent = `<!DOCTYPE html>
             </button>
           </div>
           <div id="warpGroupsContainer"></div>
+        </div>
+      </section>
+
+      <!-- ============ OUTBOUNDS (detour) ============ -->
+      <section class="page" id="page-outbounds">
+        <div class="page-head">
+          <div>
+            <h1>Outbounds</h1>
+            <p>Every outbound/endpoint in nodes.json — WARP and manually-added alike. Set "detour" to dial through another outbound.</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>All outbounds</h2>
+            <button class="btn btn-ghost btn-sm" onclick="loadOutbounds()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+              Refresh
+            </button>
+          </div>
+          <p class="sub">Manually-added outbounds come from the Raw Config editor; this table just lets you wire up "detour" for any of them without hand-editing JSON.</p>
+          <div style="overflow-x:auto;">
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>Tag</th>
+                  <th>Type</th>
+                  <th>Group</th>
+                  <th style="min-width:220px;">Detour</th>
+                </tr>
+              </thead>
+              <tbody id="outboundsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ S6 SYSTEM SERVICES ============ -->
+      <section class="page" id="page-s6">
+        <div class="page-head">
+          <div>
+            <h1>System Services (s6-overlay)</h1>
+            <p>Start/stop/restart the longrun services supervised by s6-overlay in this container, and watch their live output.</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Services</h2>
+            <button class="btn btn-ghost btn-sm" onclick="loadS6Services()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
+              Refresh
+            </button>
+          </div>
+          <p class="sub" id="s6UnavailableNote" style="display:none; color:var(--danger);"></p>
+          <div style="overflow-x:auto;">
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>Service</th>
+                  <th>Status</th>
+                  <th>PID</th>
+                  <th>Uptime</th>
+                  <th style="min-width:260px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="s6ServicesBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Live log <span id="s6LogTitle" class="hint"></span></h2>
+            <button class="btn btn-ghost btn-sm" onclick="stopS6LogStream()">Stop</button>
+          </div>
+          <p class="sub">Shows only what gets written from the moment you open a log — no history is kept.</p>
+          <pre id="s6LogView" style="background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius); padding:12px; height:340px; overflow-y:auto; font-family:var(--font-mono); font-size:12.5px; white-space:pre-wrap; word-break:break-all;"></pre>
         </div>
       </section>
 
@@ -1239,7 +1362,7 @@ const htmlContent = `<!DOCTYPE html>
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('mainContent').classList.add('show');
     var hash = window.location.hash.substring(1);
-    var validPages = ['services', 'warp', 'dashboard', 'raw', 'settings'];
+    var validPages = ['services', 'warp', 'outbounds', 's6', 'dashboard', 'raw', 'settings'];
     if (validPages.indexOf(hash) !== -1) {
       showPage(hash);
     } else {
@@ -1298,6 +1421,9 @@ const htmlContent = `<!DOCTYPE html>
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
     if (name === 'raw') ensureRawEditors();
+    if (name === 'outbounds') loadOutbounds();
+    if (name === 's6') loadS6Services();
+    else stopS6LogStream();
     if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadSubscriptions(); loadEnvSettings(); loadBackupSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
     if (window.location.hash !== '#' + name) {
@@ -1721,12 +1847,430 @@ const htmlContent = `<!DOCTYPE html>
       document.getElementById('countWarp').textContent = (data.groups || []).length;
       renderWarpGroups(data);
       renderStats(lastTemplate, lastNodes, data);
+      populateWarpGroupSelects(data);
       return data;
     } catch (err){
       showMessage('Failed to load WARP groups: ' + err.message, 'danger');
     }
   }
   window.loadWarpGroups = loadWarpGroups;
+
+  // پر کردن dropdown هایی که به فهرست گروه‌های WARP فعلی نیاز دارند:
+  // - warpApplyScope: دامنه‌ی "Apply Endpoint" (سراسری یا مختص یک گروه)
+  // - warpNewGroupSource: هنگام ساخت گروه جدید از چند اندپوینت اسکن‌شده،
+  //   کدام اکانت موجود reuse شود
+  // - warpDetour: هنگام ساخت گروه WARP جدید، detour اش به کدام تگ اشاره کند
+  function populateWarpGroupSelects(data){
+    var groups = data.groups || [];
+
+    var container = document.getElementById('warpGroupCheckboxes');
+    if (container){
+      container.innerHTML = '';
+      groups.forEach(function(g){
+        var lbl = document.createElement('label');
+        lbl.style.display = 'block';
+        lbl.style.marginBottom = '5px';
+        var chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.value = g.tag;
+        chk.style.marginRight = '8px';
+        chk.onchange = updateApplyGroupBtnState;
+        lbl.appendChild(chk);
+        lbl.appendChild(document.createTextNode(g.tag));
+        container.appendChild(lbl);
+      });
+      updateApplyGroupBtnState();
+    }
+
+    var detourSel = document.getElementById('warpDetour');
+    if (detourSel){
+      var curDetour = detourSel.value;
+      detourSel.innerHTML = '';
+      var noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = 'None (dial directly)';
+      detourSel.appendChild(noneOpt);
+      groups.forEach(function(g){
+        var opt = document.createElement('option');
+        opt.value = g.auto_tag;
+        opt.textContent = g.tag + ' (auto: ' + g.auto_tag + ')';
+        detourSel.appendChild(opt);
+        (g.endpoints || []).forEach(function(ep){
+          var epOpt = document.createElement('option');
+          epOpt.value = ep.tag;
+          epOpt.textContent = '  ↳ ' + ep.tag;
+          detourSel.appendChild(epOpt);
+        });
+      });
+      detourSel.value = curDetour || '';
+    }
+  }
+
+  window.updateApplyGroupBtnState = function() {
+    var btn = document.getElementById('btnApplyToGroup');
+    if (!btn) return;
+    var container = document.getElementById('warpGroupCheckboxes');
+    var anySelected = false;
+    if (container) {
+      var chks = container.querySelectorAll('input[type="checkbox"]');
+      for (var i = 0; i < chks.length; i++) {
+        if (chks[i].checked) { anySelected = true; break; }
+      }
+    }
+    btn.disabled = !anySelected;
+  };
+
+  // -----------------------------------------------------------------
+  // Outbounds (generic detour editor — WARP و دستی، هر دو)
+  // -----------------------------------------------------------------
+  async function loadOutbounds(){
+    try {
+      var res = await fetch('/api/outbounds');
+      var data = await res.json();
+      var list = data.outbounds || [];
+      var countEl = document.getElementById('countOutbounds');
+      if (countEl) countEl.textContent = list.length;
+      renderOutbounds(list, data.extra_tags || []);
+      return list;
+    } catch (err){
+      showMessage('Failed to load outbounds: ' + err.message, 'danger');
+    }
+  }
+  window.loadOutbounds = loadOutbounds;
+
+  function renderOutbounds(list, extraTags){
+    var body = document.getElementById('outboundsBody');
+    if (!body) return;
+    body.innerHTML = '';
+    if (list.length === 0){
+      var tr = document.createElement('tr');
+      var td = document.createElement('td');
+      td.colSpan = 4;
+      td.innerHTML = '<div class="empty-state"><p>No outbounds yet.</p></div>';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    var allTags = list.map(function(o){ return o.tag; }).concat(extraTags || []);
+    list.forEach(function(o){
+      var tr = document.createElement('tr');
+
+      var tdTag = document.createElement('td');
+      tdTag.style.fontFamily = 'var(--font-mono)';
+      tdTag.style.fontWeight = '600';
+      tdTag.textContent = o.tag;
+
+      var tdType = document.createElement('td');
+      tdType.textContent = o.type || '';
+
+      var tdGroup = document.createElement('td');
+      tdGroup.textContent = o.group || '';
+      if (!o.group) tdGroup.style.color = 'var(--text-dim)';
+
+      var tdDetour = document.createElement('td');
+      // detour برای گروه‌های auto/select معنی ندارد چون خودشان مستقیم dial
+      // نمی‌کنند؛ دراپ‌داون را برایشان نشان نمی‌دهیم.
+      if (o.type === 'selector' || o.type === 'urltest'){
+        tdDetour.innerHTML = '<span class="hint">N/A for ' + o.type + '</span>';
+      } else {
+        var sel = document.createElement('select');
+        sel.className = 'input';
+        var noneOpt = document.createElement('option');
+        noneOpt.value = '';
+        noneOpt.textContent = 'None (dial directly)';
+        sel.appendChild(noneOpt);
+        allTags.forEach(function(t){
+          if (t === o.tag) return; // خودش نمی‌تواند detour خودش باشد
+          if (t === 'Proxy' || t === 'direct' || t === 'auto' || t.endsWith('-auto')) return;
+          var opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t;
+          sel.appendChild(opt);
+        });
+        sel.value = o.detour || '';
+        sel.onchange = function(){
+          var newDetour = sel.value;
+          api('/api/set_node_detour', { tag: o.tag, detour: newDetour }).then(function(data){
+            showMessage(data.message, 'success');
+            loadWarpGroups();
+          }).catch(function(err){
+            showMessage(err.message, 'danger');
+            sel.value = o.detour || ''; // بازگردانی در صورت شکست
+          });
+        };
+        tdDetour.appendChild(sel);
+      }
+
+      tr.appendChild(tdTag);
+      tr.appendChild(tdType);
+      tr.appendChild(tdGroup);
+      tr.appendChild(tdDetour);
+      body.appendChild(tr);
+    });
+  }
+
+  // -----------------------------------------------------------------
+  // System Services (s6-overlay)
+  // -----------------------------------------------------------------
+  async function loadS6Services(){
+    var note = document.getElementById('s6UnavailableNote');
+    try {
+      var res = await fetch('/api/s6/services');
+      var data = await res.json();
+      if (!res.ok){
+        if (note){ note.style.display = 'block'; note.textContent = data.error || 'Failed to load services'; }
+        document.getElementById('s6ServicesBody').innerHTML = '';
+        return;
+      }
+      if (note) note.style.display = 'none';
+      var list = data.services || [];
+      var countEl = document.getElementById('countS6');
+      if (countEl) countEl.textContent = list.length;
+      renderS6Services(list);
+    } catch (err){
+      if (note){ note.style.display = 'block'; note.textContent = 'Failed to load services: ' + err.message; }
+    }
+  }
+  window.loadS6Services = loadS6Services;
+
+  function formatUptime(sec){
+    if (!sec || sec < 0) return '-';
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (h > 0) return h + 'h ' + m + 'm';
+    if (m > 0) return m + 'm ' + s + 's';
+    return s + 's';
+  }
+
+  function renderS6Services(list){
+    var body = document.getElementById('s6ServicesBody');
+    if (!body) return;
+    body.innerHTML = '';
+    if (list.length === 0){
+      var tr = document.createElement('tr');
+      var td = document.createElement('td');
+      td.colSpan = 5;
+      td.innerHTML = '<div class="empty-state"><p>No supervised services found.</p></div>';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    list.forEach(function(svc){
+      var tr = document.createElement('tr');
+
+      var tdName = document.createElement('td');
+      tdName.style.fontFamily = 'var(--font-mono)';
+      tdName.style.fontWeight = '600';
+      tdName.textContent = svc.name;
+
+      var tdStatus = document.createElement('td');
+      tdStatus.innerHTML = svc.up
+        ? '<span class="badge" style="background:var(--success); color:#fff;">up</span>'
+        : '<span class="badge" style="background:var(--danger); color:#fff;">down</span>';
+
+      var tdPid = document.createElement('td');
+      tdPid.textContent = svc.up ? (svc.pid || '-') : '-';
+
+      var tdUptime = document.createElement('td');
+      tdUptime.textContent = svc.up ? formatUptime(svc.uptime_sec) : '-';
+
+      var tdActions = document.createElement('td');
+      tdActions.style.display = 'flex';
+      tdActions.style.gap = '6px';
+      tdActions.style.flexWrap = 'wrap';
+
+      function actionBtn(label, action, extraStyle){
+        var b = document.createElement('button');
+        b.className = 'btn btn-ghost btn-sm';
+        if (extraStyle) b.style.cssText += extraStyle;
+        b.textContent = label;
+        b.onclick = function(){ s6Control(svc.name, action); };
+        return b;
+      }
+
+      tdActions.appendChild(actionBtn('Start', 'start'));
+      tdActions.appendChild(actionBtn('Stop', 'stop', 'color:var(--danger);'));
+      tdActions.appendChild(actionBtn('Restart', 'restart'));
+
+      var logBtn = document.createElement('button');
+      logBtn.className = 'btn btn-primary btn-sm';
+      logBtn.textContent = svc.has_logger ? 'View Logs' : 'No logger';
+      logBtn.disabled = !svc.has_logger;
+      logBtn.onclick = function(){ startS6LogStream(svc.name); };
+      tdActions.appendChild(logBtn);
+
+      tr.appendChild(tdName);
+      tr.appendChild(tdStatus);
+      tr.appendChild(tdPid);
+      tr.appendChild(tdUptime);
+      tr.appendChild(tdActions);
+      body.appendChild(tr);
+    });
+  }
+
+  function s6Control(name, action){
+    api('/api/s6/services/' + encodeURIComponent(name) + '/' + action, {}).then(function(data){
+      showMessage(data.message, 'success');
+      setTimeout(loadS6Services, 400); // یک لحظه فرصت بده وضعیت واقعاً عوض بشه
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  }
+  window.s6Control = s6Control;
+
+  var activeS6LogStream = null;
+
+  window.startS6LogStream = function(name){
+    stopS6LogStream();
+    var view = document.getElementById('s6LogView');
+    var title = document.getElementById('s6LogTitle');
+    if (title) title.textContent = '— ' + name;
+    if (view) view.textContent = '';
+    var es = new EventSource('/api/s6/services/' + encodeURIComponent(name) + '/logs');
+    activeS6LogStream = es;
+    es.onmessage = function(evt){
+      if (!view) return;
+      var atBottom = (view.scrollTop + view.clientHeight) >= (view.scrollHeight - 20);
+      view.textContent += evt.data + '\n';
+      if (atBottom) view.scrollTop = view.scrollHeight;
+    };
+    es.onerror = function(){
+      if (view) view.textContent += '\n[stream disconnected]\n';
+    };
+  };
+
+  window.stopS6LogStream = function(){
+    if (activeS6LogStream){
+      activeS6LogStream.close();
+      activeS6LogStream = null;
+    }
+  };
+
+  // activeWarpTest وضعیت تنها تستِ WARP در حال اجرا (اگر باشد) را نگه می‌دارد
+  // تا هم بشود از همان دکمه متوقفش کرد و هم با شروع یک تست جدید، قبلی خودکار
+  // متوقف شود.
+  var activeWarpTest = null;
+
+  function finishWarpTest(){
+    if (!activeWarpTest) return;
+    var btnElement = activeWarpTest.btnElement;
+    try { activeWarpTest.es.close(); } catch (e) {}
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.dataset.testing = '';
+      btnElement.innerHTML = btnElement.dataset.oldHtml || '⚡ Test';
+    }
+    activeWarpTest = null;
+  }
+
+  function stopWarpTest(){
+    if (!activeWarpTest) return;
+    api('/api/warp/endpoint/test_backups/stop', { id: activeWarpTest.id }).catch(function(){});
+    finishWarpTest();
+  }
+  window.stopWarpTest = stopWarpTest;
+
+  window.testAllNodesAndRefreshUI = function(btnElement) {
+    // کلیک دوم روی همون دکمه‌ای که در حال تست است یعنی توقف
+    if (btnElement && btnElement.dataset.testing === '1') {
+      stopWarpTest();
+      return;
+    }
+    // اگر تست دیگری (روی دکمه‌ی دیگر) در حال اجراست، اول اون رو متوقف کن
+    stopWarpTest();
+
+    var targetSpans = [];
+    // scopeTag/scopeGroup خالی می‌ماند مگر این‌که دکمه مشخص کند فقط یک نود
+    // (data-tag) یا فقط یک گروه (data-group) باید تست شود؛ اینطوری بک‌اند هم
+    // فقط همان بخش را، با اکانت واقعی خودش، از طریق sing-box تست می‌کند.
+    var scopeTag = null, scopeGroup = null;
+    if (btnElement) {
+      scopeTag = btnElement.getAttribute('data-tag');
+      scopeGroup = btnElement.getAttribute('data-group');
+
+      var row = btnElement.closest('.endpoint-row');
+      if (row) {
+        var span = row.querySelector('.endpoint-delay');
+        if (span) targetSpans.push(span);
+      } else {
+        var group = btnElement.closest('.warp-group');
+        if (group) {
+          targetSpans = Array.from(group.querySelectorAll('.endpoint-delay'));
+        }
+      }
+    }
+    if (targetSpans.length === 0) {
+      targetSpans = Array.from(document.querySelectorAll('.endpoint-delay'));
+    }
+    targetSpans.forEach(function(span) {
+      span.textContent = 'Testing...';
+      span.style.color = 'var(--text-dim)';
+    });
+    // با تعداد بالای پراکسی‌ها، تست هر کدام (به‌خاطر تک‌به‌تک‌بودنِ لازم برای
+    // جلوگیری از تداخل اکانت مشترک) چند ثانیه طول می‌کشد؛ به‌جای صبر برای همه
+    // و نمایش یک‌جا، هر نتیجه به‌محض آماده‌شدن (SSE) روی صفحه می‌آید.
+    var spanByEndpoint = {};
+    targetSpans.forEach(function(span) {
+      var ep = span.getAttribute('data-endpoint');
+      if (ep) spanByEndpoint[ep] = span;
+    });
+
+    var testId = 'warptest_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    var qs = 'id=' + encodeURIComponent(testId);
+    if (scopeTag) qs += '&tag=' + encodeURIComponent(scopeTag);
+    else if (scopeGroup) qs += '&group=' + encodeURIComponent(scopeGroup);
+
+    if (btnElement) {
+      btnElement.dataset.oldHtml = btnElement.innerHTML;
+      btnElement.dataset.testing = '1';
+      btnElement.innerHTML = '⏹ Stop (0/…)';
+    }
+
+    var es = new EventSource('/api/warp/endpoint/test_backups/stream?' + qs);
+    activeWarpTest = { es: es, id: testId, btnElement: btnElement };
+    var doneCount = 0;
+
+    es.addEventListener('start', function(evt) {
+      var data = {};
+      try { data = JSON.parse(evt.data); } catch (e) {}
+      if (btnElement) btnElement.innerHTML = '⏹ Stop (0/' + (data.total || '…') + ')';
+    });
+
+    es.addEventListener('result', function(evt) {
+      var data = {};
+      try { data = JSON.parse(evt.data); } catch (e) { return; }
+      doneCount++;
+      if (btnElement) btnElement.innerHTML = '⏹ Stop (' + doneCount + '/' + data.total + ')';
+      var span = spanByEndpoint[data.endpoint];
+      if (!span) return;
+      if (data.ok && data.delay > 0) {
+        var d = data.delay;
+        span.style.color = d < 250 ? 'var(--success)' : (d < 450 ? 'orange' : 'var(--danger)');
+        span.textContent = d + ' ms';
+      } else {
+        span.style.color = 'var(--danger)';
+        span.textContent = 'Timeout';
+      }
+    });
+
+    es.addEventListener('done', function(evt) {
+      finishWarpTest();
+    });
+
+    // توجه: هم رویداد سفارشیِ "error" که خودمان از سرور می‌فرستیم و هم خطای
+    // اتصالِ داخلیِ EventSource هر دو با نام "error" دیسپچ می‌شوند؛ فقط اولی
+    // فیلد evt.data دارد، پس با همین چک بینشان فرق می‌گذاریم.
+    es.addEventListener('error', function(evt) {
+      if (evt && evt.data) {
+        try {
+          var data = JSON.parse(evt.data);
+          showMessage('WARP test failed: ' + (data.error || 'unknown error'), 'danger');
+        } catch (e) {}
+      }
+      finishWarpTest();
+    });
+  };
 
   function renderWarpGroups(data){
     var container = document.getElementById('warpGroupsContainer');
@@ -1773,6 +2317,16 @@ const htmlContent = `<!DOCTYPE html>
       var actions = document.createElement('div');
       actions.className = 'warp-group-actions';
 
+      var testGrpBtn = document.createElement('button');
+      testGrpBtn.className = 'btn btn-ghost btn-sm';
+      testGrpBtn.innerHTML = '⚡ Quick Test';
+      testGrpBtn.setAttribute('data-group', g.tag);
+      testGrpBtn.onclick = function(ev){
+        ev.stopPropagation();
+        window.testAllNodesAndRefreshUI(testGrpBtn);
+      };
+      actions.appendChild(testGrpBtn);
+
       if (!g.is_default){
         var defBtn = document.createElement('button');
         defBtn.className = 'btn btn-ghost btn-sm';
@@ -1817,11 +2371,30 @@ const htmlContent = `<!DOCTYPE html>
         var host = document.createElement('span');
         host.className = 'endpoint-host';
         host.textContent = ep.host + ':' + ep.port;
+        
+        var delaySpan = document.createElement('span');
+        delaySpan.className = 'endpoint-delay';
+        delaySpan.style.marginLeft = '10px';
+        delaySpan.style.fontWeight = 'bold';
+        delaySpan.style.fontSize = '12px';
+        delaySpan.setAttribute('data-endpoint', ep.host + ':' + ep.port);
+        delaySpan.textContent = '';
+
         var tagSpan = document.createElement('span');
         tagSpan.style.color = 'var(--text-dim)';
         tagSpan.style.marginInlineStart = 'auto';
         tagSpan.style.marginInlineEnd = '10px';
         tagSpan.textContent = ep.tag;
+
+        var testBtn = document.createElement('button');
+        testBtn.className = 'btn btn-ghost btn-sm';
+        testBtn.style.marginRight = '5px';
+        testBtn.innerHTML = '⚡ Test';
+        testBtn.setAttribute('data-tag', ep.tag);
+        testBtn.onclick = function(ev){
+          window.testAllNodesAndRefreshUI(testBtn);
+        };
+
         var rmBtn = document.createElement('button');
         rmBtn.className = 'btn btn-ghost btn-sm';
         rmBtn.textContent = 'Remove';
@@ -1830,7 +2403,7 @@ const htmlContent = `<!DOCTYPE html>
             request('/api/delete_warp_node', { tag: ep.tag }, 'Endpoint removed');
           });
         };
-        row.appendChild(host); row.appendChild(tagSpan); row.appendChild(rmBtn);
+        row.appendChild(host); row.appendChild(delaySpan); row.appendChild(tagSpan); row.appendChild(testBtn); row.appendChild(rmBtn);
         body.appendChild(row);
       });
 
@@ -1848,7 +2421,9 @@ const htmlContent = `<!DOCTYPE html>
     if (resStr){
       reserved = resStr.split(',').map(function(s){ return parseInt(s.trim(), 10); }).filter(function(n){ return !isNaN(n); });
     }
-    request('/api/add_warp', { tag: tag, private_key: priv, reserved: reserved }, 'WARP group created').then(function(ok){
+    var detourSel = document.getElementById('warpDetour');
+    var detour = detourSel ? detourSel.value : '';
+    request('/api/add_warp', { tag: tag, private_key: priv, reserved: reserved, detour: detour }, 'WARP group created').then(function(ok){
       if (ok) document.getElementById('warpPriv').value = '';
     });
   };
@@ -1859,7 +2434,6 @@ const htmlContent = `<!DOCTYPE html>
       var data = await res.json();
       var el = document.getElementById('globalWarpEndpoint');
       if (el) el.textContent = data.endpoint || 'Not set';
-      loadWarpBackupsDropdown();
     } catch (e) {
       console.error('Failed to load warp endpoint:', e);
     }
@@ -1867,88 +2441,7 @@ const htmlContent = `<!DOCTYPE html>
 
   var knownWarpDelays = {};
 
-  async function loadWarpBackupsDropdown(){
-    try {
-      var res = await fetch('/api/warp/endpoint/backups');
-      var data = await res.json();
-      var dropdown = document.getElementById('savedWarpDropdown');
-      if (!dropdown) return;
-      dropdown.innerHTML = '';
-      var list = data.backups || [];
-      var cur = data.current || '';
 
-      list.forEach(function(ep){
-        var opt = document.createElement('option');
-        opt.value = ep;
-        opt.textContent = ep + (knownWarpDelays[ep] ? ' - ' + knownWarpDelays[ep] + 'ms' : '') + (ep === cur ? ' (Current Active)' : (ep === 'engage.cloudflareclient.com:2408' ? ' (Default)' : ''));
-        if (ep === cur) opt.selected = true;
-        dropdown.appendChild(opt);
-      });
-      
-      // Background fetch delays if not known
-      var missing = list.filter(function(ep) { return !knownWarpDelays[ep]; });
-      if (missing.length > 0 && typeof isScanning !== 'undefined' && !isScanning) {
-        api('/api/warp/endpoint/test_backups', {}).then(function(testData) {
-          var updated = false;
-          (testData.results || []).forEach(function(resItem) {
-            if (resItem.delay > 0) {
-              knownWarpDelays[resItem.endpoint] = resItem.delay;
-              updated = true;
-            }
-          });
-          if (updated) {
-            // Re-render dropdown with new delays
-            Array.from(dropdown.options).forEach(function(opt) {
-              var ep = opt.value;
-              if (knownWarpDelays[ep]) {
-                opt.textContent = ep + ' - ' + knownWarpDelays[ep] + 'ms' + (ep === cur ? ' (Current Active)' : (ep === 'engage.cloudflareclient.com:2408' ? ' (Default)' : ''));
-              }
-            });
-          }
-        }).catch(function(){}); // Ignore errors in background ping
-      }
-    } catch(e) {
-      console.error('Failed to load warp backups:', e);
-    }
-  }
-
-  window.quickTestCurrentEndpoint = function(){
-    var btn = document.getElementById('btnQuickTest');
-    var resultEl = document.getElementById('quickTestResult');
-    if (btn) btn.disabled = true;
-    if (resultEl) resultEl.innerHTML = '<span class="hint">Testing...</span>';
-
-    api('/api/warp/endpoint/ping_current', {}).then(function(data){
-      if (btn) btn.disabled = false;
-      if (data.delay > 0) {
-        if (data.endpoint) knownWarpDelays[data.endpoint] = data.delay; // Cache for dropdown
-        var color = data.delay < 250 ? 'var(--success)' : (data.delay < 450 ? 'orange' : 'var(--danger)');
-        if (resultEl) resultEl.innerHTML = '<span style="color:' + color + ';">⚡ ' + data.delay + ' ms</span>';
-        if (typeof loadWarpBackupsDropdown === 'function') loadWarpBackupsDropdown();
-      } else {
-        if (resultEl) resultEl.innerHTML = '<span style="color:var(--text-dim);">Timeout / Failed</span>';
-      }
-    }).catch(function(err){
-      if (btn) btn.disabled = false;
-      if (resultEl) resultEl.innerHTML = '<span style="color:var(--danger);">' + err.message + '</span>';
-    });
-  };
-
-  window.applyDropdownWarpEndpoint = function(){
-    var dropdown = document.getElementById('savedWarpDropdown');
-    if (!dropdown || !dropdown.value) {
-      showMessage('No saved endpoint selected', 'danger');
-      return;
-    }
-    var ep = dropdown.value;
-    api('/api/warp/endpoint/apply', { endpoint: ep }).then(function(data){
-      showMessage(data.message, 'success');
-      loadWarpEndpoint();
-      loadWarpGroups();
-    }).catch(function(err){
-      showMessage(err.message, 'danger');
-    });
-  };
 
   var isScanning = false;
   var isPaused = false;
@@ -2061,10 +2554,14 @@ const htmlContent = `<!DOCTYPE html>
         
         totalRejectedCount += (batchTested - newValidCount);
 
-        // Re-sort valid results by delay ascending
-        validScanResults.sort(function(a, b){ return a.delay - b.delay; });
-        renderValidScanTable(validScanResults);
-        loadWarpBackupsDropdown();
+        // Re-sort valid results based on current selection
+        if (window.sortScanResults) {
+          window.sortScanResults();
+        } else {
+          validScanResults.sort(function(a, b){ return a.delay - b.delay; });
+          renderValidScanTable(validScanResults);
+        }
+        updateScanUIStatus('Scanning in progress...', 'scanning');
 
         // Check if we hit pause threshold
         if (validScanResults.length >= targetPauseThreshold) {
@@ -2091,6 +2588,8 @@ const htmlContent = `<!DOCTYPE html>
     }
   }
 
+  var groupSelectedEndpoints = {};
+
   function renderValidScanTable(results){
     var body = document.getElementById('warpScanResultsBody');
     if (!body) return;
@@ -2102,17 +2601,18 @@ const htmlContent = `<!DOCTYPE html>
 
     results.forEach(function(item, idx){
       var tr = document.createElement('tr');
-      
-      var tdRadio = document.createElement('td');
-      tdRadio.style.textAlign = 'center';
-      var radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'selectedWarpEndpoint';
-      radio.value = item.endpoint;
-      if (item.endpoint === selectedVal || (!selectedVal && idx === 0)) {
-        radio.checked = true;
-      }
-      tdRadio.appendChild(radio);
+
+      var tdCheck = document.createElement('td');
+      tdCheck.style.textAlign = 'center';
+      var check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = !!groupSelectedEndpoints[item.endpoint];
+      check.onchange = function(){
+        if (check.checked) groupSelectedEndpoints[item.endpoint] = true;
+        else delete groupSelectedEndpoints[item.endpoint];
+        updateApplyGroupVisibility();
+      };
+      tdCheck.appendChild(check);
 
       var tdEp = document.createElement('td');
       tdEp.style.fontFamily = 'var(--font-mono)';
@@ -2132,41 +2632,82 @@ const htmlContent = `<!DOCTYPE html>
         tdType.innerHTML = '<span class="hint">Discovered Candidate</span>';
       }
 
-      tr.appendChild(tdRadio);
+      tr.appendChild(tdCheck);
       tr.appendChild(tdEp);
       tr.appendChild(tdPing);
       tr.appendChild(tdType);
 
       body.appendChild(tr);
     });
+    updateApplyGroupVisibility();
   }
 
-  window.applySelectedWarpEndpoint = function(){
-    var selected = document.querySelector('input[name="selectedWarpEndpoint"]:checked');
-    if (!selected) {
-      showMessage('Please select a working endpoint from the list', 'danger');
-      return;
+  function updateApplyGroupVisibility() {
+    var row = document.getElementById('warpApplyGroupRow');
+    if (row) {
+      var count = Object.keys(groupSelectedEndpoints).length;
+      row.style.display = count > 0 ? 'flex' : 'none';
     }
-    var ep = selected.value;
-    api('/api/warp/endpoint/apply', { endpoint: ep }).then(function(data){
-      showMessage(data.message, 'success');
-      loadWarpEndpoint();
-      loadWarpGroups();
-    }).catch(function(err){
-      showMessage(err.message, 'danger');
+    var checkAll = document.getElementById('selectAllScanCheckbox');
+    if (checkAll) {
+      checkAll.checked = (validScanResults.length > 0 && Object.keys(groupSelectedEndpoints).length === validScanResults.length);
+    }
+  }
+
+  window.sortScanResults = function() {
+    var sel = document.getElementById('scanSortBy');
+    if (!sel) return;
+    var v = sel.value;
+    validScanResults.sort(function(a, b) {
+      if (v === 'delay_asc') return a.delay - b.delay;
+      if (v === 'delay_desc') return b.delay - a.delay;
+      if (v === 'ip_asc') return a.endpoint.localeCompare(b.endpoint);
+      if (v === 'ip_desc') return b.endpoint.localeCompare(a.endpoint);
+      return 0;
     });
+    renderValidScanTable(validScanResults);
   };
 
-  window.resetWarpEndpoint = function(){
-    askConfirm('Reset Endpoint', 'Reset to engage.cloudflareclient.com:2408?', function(){
-      request('/api/warp/endpoint/reset', {}, 'Endpoint reset').then(function(ok){
-        if (ok) {
-          loadWarpEndpoint();
-          loadWarpGroups();
-          var container = document.getElementById('warpScanResultsContainer');
-          if (container) container.style.display = 'none';
-        }
-      });
+  window.toggleSelectAllScans = function(checked) {
+    validScanResults.forEach(function(item) {
+      if (checked) {
+        groupSelectedEndpoints[item.endpoint] = true;
+      } else {
+        delete groupSelectedEndpoints[item.endpoint];
+      }
+    });
+    renderValidScanTable(validScanResults);
+    updateApplyGroupVisibility();
+  };
+
+  window.applySelectionToGroup = function(){
+    var endpoints = Object.keys(groupSelectedEndpoints);
+    if (endpoints.length === 0){
+      showMessage('Tick at least one endpoint in the "Group" column', 'danger');
+      return;
+    }
+    
+    var container = document.getElementById('warpGroupCheckboxes');
+    var selectedGroups = [];
+    if (container) {
+      var checks = container.querySelectorAll('input[type="checkbox"]:checked');
+      for (var i = 0; i < checks.length; i++) {
+        selectedGroups.push(checks[i].value);
+      }
+    }
+
+    if (selectedGroups.length === 0) {
+      showMessage('Please select at least one group', 'danger');
+      return;
+    }
+    
+    request('/api/warp/endpoint/apply_selected_to_group', { target_groups: selectedGroups, endpoints: endpoints }, 'Endpoints applied to groups').then(function(ok){
+      if (ok){
+        groupSelectedEndpoints = {};
+        renderValidScanTable(validScanResults);
+        loadWarpGroups();
+        loadOutbounds();
+      }
     });
   };
 
@@ -3011,6 +3552,13 @@ type AppState struct {
 	DefaultWarpGroup    string   `json:"default_warp_group"`
 	GlobalWarpEndpoint  string   `json:"global_warp_endpoint,omitempty"`
 	BackupWarpEndpoints []string `json:"backup_warp_endpoints,omitempty"`
+	// NodeGroups نگاشت صریح "تگ نود" -> "پیشوند گروه" است. منبع مرجعِ گروه‌بندی
+	// WARP/سایر نودهای چندگانه؛ دیگر از parse کردن رشته‌ی تگ استفاده نمی‌کنیم چون
+	// برای پیشوندهای دلخواه (هر چیزی جز دقیقاً "WARP") غیرقابل‌اعتماد بود. نودهای
+	// قدیمی‌تر که هنوز اینجا ثبت نشده‌اند در groupPrefixForTag با یک fallback
+	// heuristic (پیشوند "WARP-") پوشش داده می‌شوند تا نصب‌های قبلی بدون migration
+	// دستی همچنان درست کار کنند.
+	NodeGroups map[string]string `json:"node_groups,omitempty"`
 	// AdminToken در صورت تنظیم از صفحه‌ی Settings، بر متغیر محیطی ADMIN_TOKEN اولویت دارد.
 	AdminToken string `json:"admin_token,omitempty"`
 	// Cloudflare تنظیمات تونل (هر سه حالت) را نگه می‌دارد.
@@ -3409,22 +3957,47 @@ func bootstrapFreshInstall() {
 	var nodes []interface{}
 	state := AppState{}
 
+	appendConfigsAsNodes := func(configs []WireGuardConfig) {
+		for _, cfg := range configs {
+			m := map[string]interface{}{}
+			b, _ := json.Marshal(cfg)
+			_ = json.Unmarshal(b, &m)
+			nodes = append(nodes, m)
+		}
+	}
+
+	// اکانت اول: گروه پیش‌فرض "WARP" — بدون detour (dial مستقیم).
 	account, err := RegisterWarpAccount()
 	if err != nil {
-		log.Printf("bootstrap: could not auto-register a WARP account (%v) — starting with zero WARP nodes; add one from the WARP Nodes tab once the manager is up", err)
+		log.Printf("bootstrap: could not auto-register the default WARP account (%v) — starting with zero WARP nodes; add one from the WARP Nodes tab once the manager is up", err)
 	} else {
-		configs, genErr := GenerateWireGuardConfigs("WARP", account, []string{getGlobalWarpEndpoint()})
+		configs, genErr := GenerateWireGuardConfigs("WARP", account, []string{getGlobalWarpEndpoint()}, "")
 		if genErr != nil {
-			log.Printf("bootstrap: failed to generate WARP endpoint configs: %v", genErr)
+			log.Printf("bootstrap: failed to generate default WARP endpoint configs: %v", genErr)
 		} else {
-			for _, cfg := range configs {
-				m := map[string]interface{}{}
-				b, _ := json.Marshal(cfg)
-				_ = json.Unmarshal(b, &m)
-				nodes = append(nodes, m)
-			}
+			appendConfigsAsNodes(configs)
+			registerNodeGroup(&state, tagsOfWireGuardConfigs(configs), "WARP")
 			state.DefaultWarpGroup = "WARP"
 			log.Printf("Registered a default WARP account and generated %d endpoint node(s) under tag prefix \"WARP\"", len(configs))
+		}
+	}
+
+	// اکانت دوم: گروه "WARP2" — یک اکانت WARP مستقل و جدا، برای مصارفی مثل
+	// عبور دادنش (detour) از پشت گروه پیش‌فرض یا هر outbound دیگری. detour اش
+	// عمداً اینجا خالی می‌ماند تا کاربر خودش از صفحه‌ی Outbounds تگ مقصد (مثلاً
+	// "WARP-auto") را انتخاب کند — این‌طوری اگر بعداً اندپوینت‌های گروه پیش‌فرض
+	// عوض شوند، لازم نیست منطق bootstrap چیزی را حدس بزند یا sync نگه دارد.
+	account2, err2 := RegisterWarpAccount()
+	if err2 != nil {
+		log.Printf("bootstrap: could not auto-register the secondary WARP account (%v) — continuing with only the default account", err2)
+	} else {
+		configs2, genErr2 := GenerateWireGuardConfigs("WARP2", account2, []string{getGlobalWarpEndpoint()}, "")
+		if genErr2 != nil {
+			log.Printf("bootstrap: failed to generate secondary WARP endpoint configs: %v", genErr2)
+		} else {
+			appendConfigsAsNodes(configs2)
+			registerNodeGroup(&state, tagsOfWireGuardConfigs(configs2), "WARP2")
+			log.Printf("Registered a secondary WARP account and generated %d endpoint node(s) under tag prefix \"WARP2\" (set its detour from the Outbounds tab if you want it chained behind another outbound)", len(configs2))
 		}
 	}
 
@@ -3433,6 +4006,7 @@ func bootstrapFreshInstall() {
 		{Name: "kimi", ListenPort: getEnvIntDefault("KIMI_LISTEN_PORT", 3002), ProxyPort: getEnvIntDefault("KIMI_PROXY_PORT", 2002)},
 		{Name: "deepseek", ListenPort: getEnvIntDefault("DEEPSEEK_LISTEN_PORT", 3005), ProxyPort: getEnvIntDefault("DEEPSEEK_PROXY_PORT", 2005)},
 		{Name: "zai", ListenPort: getEnvIntDefault("ZAI_LISTEN_PORT", 3001), ProxyPort: getEnvIntDefault("ZAI_PROXY_PORT", 2001)},
+		{Name: "zai-collect", ListenPort: getEnvIntDefault("ZAI_COLLECT_LISTEN_PORT", 0), ProxyPort: getEnvIntDefault("ZAI_COLLECTOR_PROXY_PORT", 2007)},
 		{Name: "grok2api", ListenPort: getEnvIntDefault("GROK2API_LISTEN_PORT", 3004), ProxyPort: getEnvIntDefault("GROK2API_PROXY_PORT", 2004)},
 		{Name: "qwen2api", ListenPort: getEnvIntDefault("QWEN2API_PORT", 3006), ProxyPort: getEnvIntDefault("QWEN2API_PROXY_PORT", 2006)},
 		{Name: "flaresolverr", ListenPort: getEnvIntDefault("FLARESOLVERR_PORT", 8191), ProxyPort: getEnvIntDefault("FLARESOLVERR_PROXY_PORT", 8190)},
@@ -3544,9 +4118,9 @@ func locateSingBox() (string, error) {
 		}
 	}
 
-	// ۳. دایرکتوری جاری
+	// ۳. دایرکتوری جاری و دایرکتوری نصب پیش‌فرض
 	cwd, _ := os.Getwd()
-	searchDirs := []string{cwd, "."}
+	searchDirs := []string{cwd, ".", singBoxInstallDir()}
 
 	// ۴. مسیرهای رایج نصب
 	commonDirs := []string{
@@ -4591,11 +5165,72 @@ func getGlobalWarpEndpoint() string {
 	return ep
 }
 
-func groupPrefixForTag(tag string) (prefix string, grouped bool) {
+// groupPrefixForTag پیشوند گروهِ یک تگ را برمی‌گرداند. اولویت با نگاشت صریح
+// nodeGroups (state.NodeGroups) است؛ اگر تگ آنجا ثبت نشده باشد (نصب‌های قدیمی‌تر
+// از قبل از معرفی NodeGroups)، به‌صورت fallback فرض می‌شود گروه پیش‌فرض "WARP"
+// است — دقیقاً همان heuristic قدیمی، فقط به‌عنوان مسیر جایگزین نه تنها راه.
+func groupPrefixForTag(nodeGroups map[string]string, tag string) (prefix string, grouped bool) {
+	if g, ok := nodeGroups[tag]; ok && g != "" {
+		return g, true
+	}
 	if strings.HasPrefix(tag, "WARP-") {
 		return "WARP", true
 	}
 	return tag, false
+}
+
+// registerNodeGroup چند تگ را به یک گروه نسبت می‌دهد (state را در جا تغییر می‌دهد،
+// فراخوان مسئول writeState است). همه‌ی مسیرهایی که نود جدید می‌سازند باید از این
+// عبور کنند تا nodes.json و state.json هرگز از هم واگرا نشوند.
+func registerNodeGroup(state *AppState, tags []string, group string) {
+	if group == "" || len(tags) == 0 {
+		return
+	}
+	if state.NodeGroups == nil {
+		state.NodeGroups = map[string]string{}
+	}
+	for _, t := range tags {
+		if t != "" {
+			state.NodeGroups[t] = group
+		}
+	}
+}
+
+// renameNodeGroup هنگام rename شدن یک گروه (editWarpGroupHandler)، نگاشت هر
+// تگ قدیمی را به تگ جدید منتقل می‌کند.
+func renameNodeGroup(state *AppState, oldTag, newTag, newGroup string) {
+	if state.NodeGroups == nil {
+		return
+	}
+	delete(state.NodeGroups, oldTag)
+	if newTag != "" && newGroup != "" {
+		if state.NodeGroups == nil {
+			state.NodeGroups = map[string]string{}
+		}
+		state.NodeGroups[newTag] = newGroup
+	}
+}
+
+// removeNodeGroupEntries هنگام حذف نود/گروه، نگاشت مربوطه را از state پاک می‌کند
+// تا NodeGroups دچار نشتی entryهای مرده نشود (که در صورت reuse شدن یک تگ می‌تواند
+// باعث گروه‌بندی اشتباه شود).
+func removeNodeGroupEntries(state *AppState, tags []string) {
+	if state.NodeGroups == nil {
+		return
+	}
+	for _, t := range tags {
+		delete(state.NodeGroups, t)
+	}
+}
+
+// tagsOfWireGuardConfigs یک helper کوچک برای استخراج فهرست تگ‌ها از خروجی
+// GenerateWireGuardConfigs است — برای صدا زدن مستقیم registerNodeGroup.
+func tagsOfWireGuardConfigs(configs []WireGuardConfig) []string {
+	tags := make([]string, 0, len(configs))
+	for _, c := range configs {
+		tags = append(tags, c.Tag)
+	}
+	return tags
 }
 
 // ---------------------------------------------------------------------
@@ -4771,6 +5406,10 @@ type AddWarpRequest struct {
 	Tag        string `json:"tag"`
 	PrivateKey string `json:"private_key"`
 	Reserved   []int  `json:"reserved"`
+	// Detour اختیاری است: تگ یک outbound/endpoint دیگر که این گروه‌ی تازه باید
+	// از پشتش dial شود. خالی یعنی dial مستقیم؛ بعداً هم از صفحه‌ی Outbounds
+	// قابل تغییر است.
+	Detour string `json:"detour"`
 }
 
 const (
@@ -4786,6 +5425,10 @@ type WireGuardConfig struct {
 	PrivateKey string   `json:"private_key"`
 	MTU        int      `json:"mtu"`
 	Peers      []Peer   `json:"peers"`
+	// Detour یک فیلد استاندارد sing-box (Dial Fields) است: تگ outbound/endpoint
+	// دیگری که ترافیک همین WireGuard endpoint باید از طریق آن dial شود (مثلاً
+	// برای عبور یک اکانت WARP از پشت اکانت WARP دیگر). خالی یعنی dial مستقیم.
+	Detour string `json:"detour,omitempty"`
 }
 
 type Peer struct {
@@ -4810,7 +5453,7 @@ func parseEndpoint(endpoint string) (host string, port int, err error) {
 	return host, port, nil
 }
 
-func GenerateWireGuardConfigs(prefix string, account *WarpAccount, endpoints []string) ([]WireGuardConfig, error) {
+func GenerateWireGuardConfigs(prefix string, account *WarpAccount, endpoints []string, detour string) ([]WireGuardConfig, error) {
 	if account == nil {
 		return nil, fmt.Errorf("account is nil")
 	}
@@ -4849,6 +5492,7 @@ func GenerateWireGuardConfigs(prefix string, account *WarpAccount, endpoints []s
 					Reserved:   reservedInts,
 				},
 			},
+			Detour: detour,
 		}
 		configs = append(configs, config)
 	}
@@ -4952,7 +5596,7 @@ func renderConfig(tmpl map[string]interface{}, nodes []interface{}, state AppSta
 				continue
 			}
 			wireguardTags = append(wireguardTags, tag)
-			prefix, grouped := groupPrefixForTag(tag)
+			prefix, grouped := groupPrefixForTag(state.NodeGroups, tag)
 			if grouped {
 				if !seenGroup[prefix] {
 					seenGroup[prefix] = true
@@ -5019,7 +5663,7 @@ func renderConfig(tmpl map[string]interface{}, nodes []interface{}, state AppSta
 	var globalAutoMembers []string
 	globalAutoMembers = append(globalAutoMembers, groupAutoTags...)
 	for _, tag := range wireguardTags {
-		if _, grouped := groupPrefixForTag(tag); !grouped {
+		if _, grouped := groupPrefixForTag(state.NodeGroups, tag); !grouped {
 			globalAutoMembers = append(globalAutoMembers, tag)
 		}
 	}
@@ -6573,6 +7217,7 @@ func existingWarpGroupPrefixes() map[string]bool {
 	out := map[string]bool{}
 	var nodes []interface{}
 	_ = readJSON(nodesFile, &nodes)
+	nodeGroups := readStateOrDefault().NodeGroups
 	for _, n := range nodes {
 		m, ok := n.(map[string]interface{})
 		if !ok {
@@ -6583,7 +7228,7 @@ func existingWarpGroupPrefixes() map[string]bool {
 			continue
 		}
 		tag, _ := m["tag"].(string)
-		if prefix, grouped := groupPrefixForTag(tag); grouped {
+		if prefix, grouped := groupPrefixForTag(nodeGroups, tag); grouped {
 			out[prefix] = true
 		}
 	}
@@ -7435,7 +8080,9 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	configs, err := GenerateWireGuardConfigs(req.Tag, account, []string{getGlobalWarpEndpoint()})
+	req.Detour = strings.TrimSpace(req.Detour)
+
+	configs, err := GenerateWireGuardConfigs(req.Tag, account, []string{getGlobalWarpEndpoint()}, req.Detour)
 	if err != nil {
 		log.Printf("addWarpHandler: GenerateWireGuardConfigs failed: %v", err)
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Failed to generate configs: " + err.Error()})
@@ -7444,6 +8091,12 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 	if len(configs) == 0 {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "No configs generated"})
 		return
+	}
+	for _, cfg := range configs {
+		if req.Detour != "" && req.Detour == cfg.Tag {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Detour cannot reference the group's own tag"})
+			return
+		}
 	}
 
 	mu.Lock()
@@ -7461,6 +8114,7 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes file: " + err.Error()})
 		return
 	}
+	state := readStateOrDefault()
 
 	existingTags := make(map[string]bool, len(nodes))
 	for _, n := range nodes {
@@ -7484,7 +8138,7 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// همچنین مطمئن می‌شویم که این پیشوند خودش هم‌نام یک گروه موجود نیست
 	// (مثلاً prefix "WARP" وقتی از قبل گروه "WARP" با اندپوینت‌های دیگری وجود دارد).
-	for _, g := range buildWarpGroups(nodes, "") {
+	for _, g := range buildWarpGroups(nodes, "", state.NodeGroups) {
 		if g.Tag == req.Tag {
 			jsonResponse(w, http.StatusConflict, map[string]interface{}{
 				"error": fmt.Sprintf("A WARP group named %q already exists, choose a different prefix", req.Tag),
@@ -7499,13 +8153,13 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(jsonData, &cfgMap)
 		nodes = append(nodes, cfgMap)
 	}
+	registerNodeGroup(&state, tagsOfWireGuardConfigs(configs), req.Tag)
 
-	state := readStateOrDefault()
 	if state.DefaultWarpGroup == "" {
 		state.DefaultWarpGroup = req.Tag
-		if err := writeState(state); err != nil {
-			log.Printf("addWarpHandler: failed to persist state.json: %v", err)
-		}
+	}
+	if err := writeState(state); err != nil {
+		log.Printf("addWarpHandler: failed to persist state.json: %v", err)
 	}
 
 	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
@@ -7524,9 +8178,10 @@ func addWarpHandler(w http.ResponseWriter, r *http.Request) {
 // کل گروه، و حذف تک‌تک اندپوینت‌ها.
 // ---------------------------------------------------------------------
 type WarpEndpointView struct {
-	Tag  string `json:"tag"`
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Tag    string `json:"tag"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	Detour string `json:"detour,omitempty"`
 }
 
 type WarpGroupView struct {
@@ -7537,7 +8192,10 @@ type WarpGroupView struct {
 	Endpoints []WarpEndpointView `json:"endpoints"`
 }
 
-func buildWarpGroups(nodes []interface{}, defaultGroup string) []WarpGroupView {
+// buildWarpGroups نودهای wireguard/tailscale را بر اساس nodeGroups (نگاشت صریح
+// state.NodeGroups؛ برای نودهای قدیمی‌تر ثبت‌نشده، از fallback داخل
+// groupPrefixForTag استفاده می‌شود) گروه‌بندی می‌کند.
+func buildWarpGroups(nodes []interface{}, defaultGroup string, nodeGroups map[string]string) []WarpGroupView {
 	groups := map[string][]WarpEndpointView{}
 	var order []string
 	seen := map[string]bool{}
@@ -7555,7 +8213,7 @@ func buildWarpGroups(nodes []interface{}, defaultGroup string) []WarpGroupView {
 		if tag == "" {
 			continue
 		}
-		prefix, _ := groupPrefixForTag(tag)
+		prefix, _ := groupPrefixForTag(nodeGroups, tag)
 		host, port := "", 0
 		if peers, ok := m["peers"].([]interface{}); ok && len(peers) > 0 {
 			if pm, ok := peers[0].(map[string]interface{}); ok {
@@ -7565,11 +8223,12 @@ func buildWarpGroups(nodes []interface{}, defaultGroup string) []WarpGroupView {
 				}
 			}
 		}
+		detour, _ := m["detour"].(string)
 		if !seen[prefix] {
 			seen[prefix] = true
 			order = append(order, prefix)
 		}
-		groups[prefix] = append(groups[prefix], WarpEndpointView{Tag: tag, Host: host, Port: port})
+		groups[prefix] = append(groups[prefix], WarpEndpointView{Tag: tag, Host: host, Port: port, Detour: detour})
 	}
 	sort.Strings(order)
 
@@ -7599,7 +8258,7 @@ func warpGroupsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	state := readStateOrDefault()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"groups":        buildWarpGroups(nodes, state.DefaultWarpGroup),
+		"groups":        buildWarpGroups(nodes, state.DefaultWarpGroup, state.NodeGroups),
 		"default_group": state.DefaultWarpGroup,
 	})
 }
@@ -7622,10 +8281,11 @@ func setDefaultWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
 		return
 	}
+	state := readStateOrDefault()
 
 	if req.Tag != "" {
 		found := false
-		for _, g := range buildWarpGroups(nodes, "") {
+		for _, g := range buildWarpGroups(nodes, "", state.NodeGroups) {
 			if g.Tag == req.Tag {
 				found = true
 				break
@@ -7637,7 +8297,6 @@ func setDefaultWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	state := readStateOrDefault()
 	state.DefaultWarpGroup = req.Tag
 	if err := writeState(state); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to persist state: " + err.Error()})
@@ -7679,36 +8338,37 @@ func deleteWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
 		return
 	}
+	state := readStateOrDefault()
 
 	var kept []interface{}
-	removed := 0
+	var removedTags []string
 	for _, n := range nodes {
 		if m, ok := n.(map[string]interface{}); ok {
 			tag, _ := m["tag"].(string)
-			prefix, _ := groupPrefixForTag(tag)
+			prefix, _ := groupPrefixForTag(state.NodeGroups, tag)
 			if prefix == req.Tag {
-				removed++
+				removedTags = append(removedTags, tag)
 				continue
 			}
 		}
 		kept = append(kept, n)
 	}
-	if removed == 0 {
+	if len(removedTags) == 0 {
 		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("WARP group %q not found", req.Tag)})
 		return
 	}
+	removeNodeGroupEntries(&state, removedTags)
 
-	state := readStateOrDefault()
 	if state.DefaultWarpGroup == req.Tag {
-		remaining := buildWarpGroups(kept, "")
+		remaining := buildWarpGroups(kept, "", state.NodeGroups)
 		if len(remaining) > 0 {
 			state.DefaultWarpGroup = remaining[0].Tag
 		} else {
 			state.DefaultWarpGroup = ""
 		}
-		if err := writeState(state); err != nil {
-			log.Printf("deleteWarpGroupHandler: failed to persist state.json: %v", err)
-		}
+	}
+	if err := writeState(state); err != nil {
+		log.Printf("deleteWarpGroupHandler: failed to persist state.json: %v", err)
 	}
 
 	var tmpl map[string]interface{}
@@ -7721,7 +8381,7 @@ func deleteWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Removed %d node(s) from group %q", removed, req.Tag)})
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Removed %d node(s) from group %q", len(removedTags), req.Tag)})
 }
 
 func editWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
@@ -7752,9 +8412,10 @@ func editWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
 		return
 	}
+	state := readStateOrDefault()
 
 	if req.NewTag != req.OldTag {
-		for _, g := range buildWarpGroups(nodes, "") {
+		for _, g := range buildWarpGroups(nodes, "", state.NodeGroups) {
 			if g.Tag == req.NewTag {
 				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("A WARP group named %q already exists", req.NewTag)})
 				return
@@ -7763,17 +8424,21 @@ func editWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	changed := 0
+	renameMap := map[string]string{}
 	var updated []interface{}
 	for _, n := range nodes {
 		m, ok := n.(map[string]interface{})
 		if ok {
 			tag, _ := m["tag"].(string)
-			prefix, grouped := groupPrefixForTag(tag)
+			prefix, grouped := groupPrefixForTag(state.NodeGroups, tag)
 			if grouped && prefix == req.OldTag {
 				suffix := tag[len(prefix):]
+				newTag := req.NewTag + suffix
 				clone := cloneMap(m)
-				clone["tag"] = req.NewTag + suffix
+				clone["tag"] = newTag
 				updated = append(updated, clone)
+				renameNodeGroup(&state, tag, newTag, req.NewTag)
+				renameMap[tag] = newTag
 				changed++
 				continue
 			}
@@ -7784,13 +8449,30 @@ func editWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("WARP group %q not found", req.OldTag)})
 		return
 	}
+	// اگه گروه واقعاً rename شده (نه صرفاً هم‌نام)، تگ پویای "-auto" اش هم عوض
+	// می‌شود؛ هر outbound دیگری که detour اش به این گروه (یا -auto اش) اشاره
+	// می‌کرد باید به‌روزرسانی شود، وگرنه بعد از rename به تگ ناموجود می‌رسد.
+	if req.NewTag != req.OldTag {
+		renameMap[req.OldTag+"-auto"] = req.NewTag + "-auto"
+		for i, n := range updated {
+			m, ok := n.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			d, _ := m["detour"].(string)
+			if newD, ok := renameMap[d]; ok && d != "" {
+				clone := cloneMap(m)
+				clone["detour"] = newD
+				updated[i] = clone
+			}
+		}
+	}
 
-	state := readStateOrDefault()
 	if state.DefaultWarpGroup == req.OldTag {
 		state.DefaultWarpGroup = req.NewTag
-		if err := writeState(state); err != nil {
-			log.Printf("editWarpGroupHandler: failed to persist state.json: %v", err)
-		}
+	}
+	if err := writeState(state); err != nil {
+		log.Printf("editWarpGroupHandler: failed to persist state.json: %v", err)
 	}
 
 	var tmpl map[string]interface{}
@@ -7846,9 +8528,10 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := readStateOrDefault()
+	removeNodeGroupEntries(&state, []string{req.Tag})
 	if state.DefaultWarpGroup != "" {
 		stillExists := false
-		for _, g := range buildWarpGroups(kept, "") {
+		for _, g := range buildWarpGroups(kept, "", state.NodeGroups) {
 			if g.Tag == state.DefaultWarpGroup {
 				stillExists = true
 				break
@@ -7856,10 +8539,10 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if !stillExists {
 			state.DefaultWarpGroup = ""
-			if err := writeState(state); err != nil {
-				log.Printf("deleteWarpNodeHandler: failed to persist state.json: %v", err)
-			}
 		}
+	}
+	if err := writeState(state); err != nil {
+		log.Printf("deleteWarpNodeHandler: failed to persist state.json: %v", err)
 	}
 
 	var tmpl map[string]interface{}
@@ -7875,7 +8558,12 @@ func deleteWarpNodeHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Node %q removed", req.Tag)})
 }
 
-func applyWarpEndpointToNodes(ep string) error {
+// applyWarpEndpointToNodes آدرس/پورت peer را برای نودهای WARP به‌روزرسانی می‌کند.
+// اگر group خالی باشد، رفتار قبلی حفظ می‌شود: روی همه‌ی نودهای wireguard اعمال
+// می‌شود (سراسری). اگر group پر باشد، فقط نودهایی که طبق state.NodeGroups عضو
+// همان گروه‌اند تغییر می‌کنند — لازم چون با وجود چند اکانت WARP، همیشه نمی‌خواهیم
+// یک انتخاب اندپوینت روی همه‌شان اثر بگذارد.
+func applyWarpEndpointToNodes(ep string, group string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -7884,11 +8572,23 @@ func applyWarpEndpointToNodes(ep string) error {
 		return err
 	}
 
+	var nodeGroups map[string]string
+	if group != "" {
+		nodeGroups = readStateOrDefault().NodeGroups
+	}
+
 	host, port, _ := parseEndpoint(ep)
 
 	for _, n := range nodesRaw {
 		if m, ok := n.(map[string]interface{}); ok {
 			if t, ok := m["type"].(string); ok && t == "wireguard" {
+				if group != "" {
+					tag, _ := m["tag"].(string)
+					prefix, _ := groupPrefixForTag(nodeGroups, tag)
+					if prefix != group {
+						continue
+					}
+				}
 				delete(m, "server")
 				delete(m, "server_port")
 
@@ -7921,7 +8621,7 @@ func getWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 
 func pingCurrentWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	ep := getGlobalWarpEndpoint()
-	results, _, err := scanBatchWarpEndpoints(1, []string{}, "both")
+	results, _, err := scanBatchWarpEndpoints(1, []string{}, "both", "", "")
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
@@ -8068,9 +8768,18 @@ func getWarpBackupsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// testWarpBackupsHandler pings the backups and returns delays
+// testWarpBackupsHandler pings the backups and returns delays. با فرستادن
+// "tag" فقط همان یک نود، و با فرستادن "group" فقط نودهای همان گروه (هر کدام
+// با اکانت واقعی خودش) تست می‌شوند؛ بدون هیچ‌کدام، رفتار قدیمی (تست همه) اجرا
+// می‌شود.
 func testWarpBackupsHandler(w http.ResponseWriter, r *http.Request) {
-	results, _, err := scanBatchWarpEndpoints(0, []string{}, "both")
+	var req struct {
+		Tag   string `json:"tag"`
+		Group string `json:"group"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // بدنه اختیاری است؛ نبودش یعنی تست همه‌ی نودها
+
+	results, _, err := scanBatchWarpEndpoints(0, []string{}, "both", strings.TrimSpace(req.Tag), strings.TrimSpace(req.Group))
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
@@ -8085,6 +8794,9 @@ func testWarpBackupsHandler(w http.ResponseWriter, r *http.Request) {
 func applyWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Endpoint string `json:"endpoint"`
+		// Group اختیاری است: خالی = رفتار قدیمی (روی همه‌ی گروه‌های WARP اعمال
+		// می‌شود)؛ پر = فقط همان یک گروه (وقتی چند اکانت WARP وجود دارد).
+		Group string `json:"group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Endpoint) == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid endpoint"})
@@ -8092,28 +8804,45 @@ func applyWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ep := strings.TrimSpace(req.Endpoint)
-	state := readStateOrDefault()
-	state.GlobalWarpEndpoint = ep
-	_ = writeState(state)
+	group := strings.TrimSpace(req.Group)
 
-	if err := applyWarpEndpointToNodes(ep); err != nil {
+	if group == "" {
+		state := readStateOrDefault()
+		state.GlobalWarpEndpoint = ep
+		_ = writeState(state)
+	}
+
+	if err := applyWarpEndpointToNodes(ep, group); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to apply endpoint: " + err.Error()})
 		return
 	}
 
+	msg := "Applied global WARP endpoint: " + ep
+	if group != "" {
+		msg = fmt.Sprintf("Applied WARP endpoint to group %q: %s", group, ep)
+	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"message":  "Applied global WARP endpoint: " + ep,
+		"message":  msg,
 		"endpoint": ep,
+		"group":    group,
 	})
 }
 
 func resetWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
-	state := readStateOrDefault()
-	state.GlobalWarpEndpoint = ""
-	_ = writeState(state)
+	var req struct {
+		Group string `json:"group"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // بدنه اختیاری است؛ نبودش یعنی reset سراسری
+	group := strings.TrimSpace(req.Group)
+
+	if group == "" {
+		state := readStateOrDefault()
+		state.GlobalWarpEndpoint = ""
+		_ = writeState(state)
+	}
 
 	ep := getGlobalWarpEndpoint()
-	if err := applyWarpEndpointToNodes(ep); err != nil {
+	if err := applyWarpEndpointToNodes(ep, group); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to apply default endpoint: " + err.Error()})
 		return
 	}
@@ -8121,7 +8850,747 @@ func resetWarpEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"message":  "Reset to default WARP endpoint",
 		"endpoint": ep,
+		"group":    group,
 	})
+}
+
+// ---------------------------------------------------------------------
+// Outbounds عمومی: لیست همه‌ی نودها (WARP و دستی) + تنظیم detour
+// ---------------------------------------------------------------------
+
+// OutboundNodeView یک ردیف عمومی برای صفحه‌ی "Outbounds" است — چه نود از نوع
+// wireguard/tailscale (WARP) باشد چه یک outbound دستیِ دیگر (vless/trojan/...).
+type OutboundNodeView struct {
+	Tag    string `json:"tag"`
+	Type   string `json:"type"`
+	Detour string `json:"detour,omitempty"`
+	// Group پر است فقط اگر این نود عضو یک گروه WARP شناخته‌شده باشد (برای
+	// نمایش/فیلتر در فرانت مفید است؛ روی رفتار detour اثری ندارد).
+	Group string `json:"group,omitempty"`
+}
+
+func applySelectedToGroupHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TargetGroups []string `json:"target_groups"`
+		Endpoints    []string `json:"endpoints"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	
+	var targetGroups []string
+	for _, tg := range req.TargetGroups {
+		tg = strings.TrimSpace(tg)
+		if tg != "" {
+			targetGroups = append(targetGroups, tg)
+		}
+	}
+	
+	var endpoints []string
+	for _, ep := range req.Endpoints {
+		ep = strings.TrimSpace(ep)
+		if ep != "" {
+			endpoints = append(endpoints, ep)
+		}
+	}
+
+	if len(targetGroups) == 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Select at least one group"})
+		return
+	}
+	if len(endpoints) == 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Select at least one endpoint"})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var nodes []interface{}
+	if err := readJSON(nodesFile, &nodes); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
+		return
+	}
+	state := readStateOrDefault()
+
+	type GroupInfo struct {
+		Account   *WarpAccount
+		OldDetour string
+	}
+	groupInfos := make(map[string]GroupInfo)
+
+	for _, tg := range targetGroups {
+		var sourceNode map[string]interface{}
+		var oldDetour string
+		for _, n := range nodes {
+			m, ok := n.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t, _ := m["type"].(string)
+			if t != "wireguard" {
+				continue
+			}
+			tag, _ := m["tag"].(string)
+			if prefix, grouped := groupPrefixForTag(state.NodeGroups, tag); grouped && prefix == tg {
+				sourceNode = m
+				if d, ok := m["detour"].(string); ok {
+					oldDetour = d
+				}
+				break
+			}
+		}
+		if sourceNode == nil {
+			jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Target WARP group %q not found", tg)})
+			return
+		}
+		account, err := warpAccountFromNodeMap(sourceNode)
+		if err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": fmt.Sprintf("Failed to extract account for %q: %v", tg, err)})
+			return
+		}
+		groupInfos[tg] = GroupInfo{Account: account, OldDetour: oldDetour}
+	}
+
+	var newNodes []interface{}
+	for _, n := range nodes {
+		if m, ok := n.(map[string]interface{}); ok {
+			if t, _ := m["type"].(string); t == "wireguard" {
+				tag, _ := m["tag"].(string)
+				prefix, grouped := groupPrefixForTag(state.NodeGroups, tag)
+				
+				shouldSkip := false
+				if grouped {
+					for _, tg := range targetGroups {
+						if prefix == tg {
+							shouldSkip = true
+							break
+						}
+					}
+				}
+				if shouldSkip {
+					continue
+				}
+			}
+		}
+		newNodes = append(newNodes, n)
+	}
+
+	totalNodesGenerated := 0
+	for _, tg := range targetGroups {
+		info := groupInfos[tg]
+		configs, err := GenerateWireGuardConfigs(tg, info.Account, endpoints, info.OldDetour)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("Failed to generate configs for %q: %v", tg, err)})
+			return
+		}
+		for _, cfg := range configs {
+			m := map[string]interface{}{}
+			b, _ := json.Marshal(cfg)
+			_ = json.Unmarshal(b, &m)
+			newNodes = append(newNodes, m)
+		}
+		registerNodeGroup(&state, tagsOfWireGuardConfigs(configs), tg)
+		totalNodesGenerated += len(configs)
+	}
+
+	if err := writeState(state); err != nil {
+		log.Printf("applySelectedToGroupHandler: failed to persist state.json: %v", err)
+	}
+
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
+		return
+	}
+	if err := applyChangeFromStruct(tmpl, newNodes); err != nil {
+		log.Printf("applySelectedToGroupHandler: %v", err)
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("%d WARP node(s) applied to %d group(s) successfully!", totalNodesGenerated, len(targetGroups)),
+	})
+}
+
+// listOutboundsHandler همه‌ی نودهای nodes.json را برمی‌گرداند — هم برای پر کردن
+// جدول صفحه‌ی Outbounds و هم برای پر کردن گزینه‌های dropdown انتخاب detour
+// (که باید شامل همه‌ی تگ‌های موجود، از هر نوعی، باشد).
+func listOutboundsHandler(w http.ResponseWriter, r *http.Request) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	var nodes []interface{}
+	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
+		return
+	}
+	nodeGroups := readStateOrDefault().NodeGroups
+
+	out := make([]OutboundNodeView, 0, len(nodes))
+	groupSeen := map[string]bool{}
+	for _, n := range nodes {
+		m, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		tag, _ := m["tag"].(string)
+		typ, _ := m["type"].(string)
+		if tag == "" {
+			continue
+		}
+		detour, _ := m["detour"].(string)
+		group := ""
+		if typ == "wireguard" || typ == "tailscale" {
+			if g, grouped := groupPrefixForTag(nodeGroups, tag); grouped {
+				group = g
+				groupSeen[g] = true
+			}
+		}
+		out = append(out, OutboundNodeView{Tag: tag, Type: typ, Detour: detour, Group: group})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tag < out[j].Tag })
+
+	// extraTags تگ‌های معتبری هستند که در nodes.json به‌عنوان یک نود مستقل
+	// وجود ندارند (بنابراین ردیفی در جدول نمی‌گیرند) اما در config.json نهایی
+	// واقعاً ساخته می‌شوند و هدف معتبری برای detour هستند: تگ پویای "-auto" هر
+	// گروه WARP، و دو تگ همیشگی "auto"/"direct" که در اسکلت template.json وجود
+	// دارند.
+	extraTags := []string{"auto", "direct"}
+	var groupNames []string
+	for g := range groupSeen {
+		groupNames = append(groupNames, g)
+	}
+	sort.Strings(groupNames)
+	for _, g := range groupNames {
+		extraTags = append(extraTags, g+"-auto")
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"outbounds":  out,
+		"extra_tags": extraTags,
+	})
+}
+
+// setNodeDetourHandler فیلد "detour" را روی یک نود ست یا (اگر detour خالی
+// فرستاده شود) حذف می‌کند. اعتبارسنجی واقعی (تگ ناموجود، حلقه‌ی detour و…) به
+// applyChangeFromStruct → sing-box check سپرده می‌شود؛ اینجا فقط self-reference
+// را رد می‌کنیم چون sing-box ممکن است آن را دیرتر (در runtime) خطا بدهد.
+func setNodeDetourHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Tag    string `json:"tag"`
+		Detour string `json:"detour"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Tag = strings.TrimSpace(req.Tag)
+	req.Detour = strings.TrimSpace(req.Detour)
+	if req.Tag == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Tag is required"})
+		return
+	}
+	if req.Detour == req.Tag {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Detour cannot reference the node's own tag"})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var nodes []interface{}
+	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
+		return
+	}
+
+	found := false
+	for i, n := range nodes {
+		m, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if tag, _ := m["tag"].(string); tag != req.Tag {
+			continue
+		}
+		found = true
+		clone := cloneMap(m)
+		if req.Detour == "" {
+			delete(clone, "detour")
+		} else {
+			clone["detour"] = req.Detour
+		}
+		nodes[i] = clone
+		break
+	}
+	if !found {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Node %q not found", req.Tag)})
+		return
+	}
+
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
+		return
+	}
+	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
+		log.Printf("setNodeDetourHandler: %v", err)
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Detour for %q updated", req.Tag)})
+}
+
+// ---------------------------------------------------------------------
+// ساخت گروه جدید از چند اندپوینت اسکن‌شده‌ی انتخابی
+// ---------------------------------------------------------------------
+
+// warpAccountFromNodeMap اکانت WARP (private_key/v4/v6/peer public key/reserved)
+// را از یک نود wireguard موجود در nodes.json استخراج می‌کند — برای وقتی که
+// می‌خواهیم یک گروه جدید را روی همان اکانت (نه اکانت تازه) بسازیم.
+func warpAccountFromNodeMap(m map[string]interface{}) (*WarpAccount, error) {
+	privateKey, _ := m["private_key"].(string)
+	if privateKey == "" {
+		return nil, fmt.Errorf("source node has no private_key")
+	}
+	v4, v6 := defaultV4, defaultV6
+	if addrs, ok := m["address"].([]interface{}); ok {
+		for _, a := range addrs {
+			s, _ := a.(string)
+			s = strings.SplitN(s, "/", 2)[0]
+			if s == "" {
+				continue
+			}
+			if strings.Contains(s, ":") {
+				v6 = s
+			} else {
+				v4 = s
+			}
+		}
+	}
+	peerPublicKey := defaultPeerPublicKey
+	var reserved []byte
+	if peers, ok := m["peers"].([]interface{}); ok && len(peers) > 0 {
+		if pm, ok := peers[0].(map[string]interface{}); ok {
+			if pk, ok := pm["public_key"].(string); ok && pk != "" {
+				peerPublicKey = pk
+			}
+			if rs, ok := pm["reserved"].([]interface{}); ok {
+				reserved = make([]byte, 0, len(rs))
+				for _, v := range rs {
+					if f, ok := toFloat(v); ok {
+						reserved = append(reserved, byte(f))
+					}
+				}
+			}
+		}
+	}
+	return &WarpAccount{
+		PrivateKey:    privateKey,
+		V4:            v4,
+		V6:            v6,
+		PeerPublicKey: peerPublicKey,
+		Reserved:      reserved,
+	}, nil
+}
+
+// createWarpGroupHandler چند ip:port انتخابی از نتایج اسکن را می‌گیرد و به تعداد
+// همه‌ی آن‌ها، نود WireGuard جدید زیر یک تگ/گروه مشترک تازه می‌سازد — یا با
+// استفاده از اکانت یک گروه موجود (SourceGroup) یا با ثبت‌نام یک اکانت تازه.
+func createWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prefix      string   `json:"prefix"`
+		Endpoints   []string `json:"endpoints"`
+		SourceGroup string   `json:"source_group"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Prefix = strings.TrimSpace(req.Prefix)
+	req.SourceGroup = strings.TrimSpace(req.SourceGroup)
+	if !warpTagRe.MatchString(req.Prefix) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Prefix must be 1-40 characters: letters, digits, underscore, hyphen"})
+		return
+	}
+	var endpoints []string
+	for _, ep := range req.Endpoints {
+		ep = strings.TrimSpace(ep)
+		if ep != "" {
+			endpoints = append(endpoints, ep)
+		}
+	}
+	if len(endpoints) == 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Select at least one endpoint"})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var nodes []interface{}
+	if err := readJSON(nodesFile, &nodes); err != nil && !os.IsNotExist(err) {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read nodes.json"})
+		return
+	}
+	state := readStateOrDefault()
+
+	for _, g := range buildWarpGroups(nodes, "", state.NodeGroups) {
+		if g.Tag == req.Prefix {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{
+				"error": fmt.Sprintf("A WARP group named %q already exists, choose a different prefix", req.Prefix),
+			})
+			return
+		}
+	}
+
+	var account *WarpAccount
+	if req.SourceGroup != "" {
+		var sourceNode map[string]interface{}
+		for _, n := range nodes {
+			m, ok := n.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t, _ := m["type"].(string)
+			if t != "wireguard" {
+				continue
+			}
+			tag, _ := m["tag"].(string)
+			if prefix, grouped := groupPrefixForTag(state.NodeGroups, tag); grouped && prefix == req.SourceGroup {
+				sourceNode = m
+				break
+			}
+		}
+		if sourceNode == nil {
+			jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Source WARP group %q not found", req.SourceGroup)})
+			return
+		}
+		acc, err := warpAccountFromNodeMap(sourceNode)
+		if err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to reuse source account: " + err.Error()})
+			return
+		}
+		account = acc
+	} else {
+		acc, err := RegisterWarpAccount()
+		if err != nil {
+			jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "Failed to register new account: " + err.Error()})
+			return
+		}
+		account = acc
+	}
+
+	configs, err := GenerateWireGuardConfigs(req.Prefix, account, endpoints, "")
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Failed to generate configs: " + err.Error()})
+		return
+	}
+	if len(configs) == 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "No configs generated"})
+		return
+	}
+
+	existingTags := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		if m, ok := n.(map[string]interface{}); ok {
+			if t, ok := m["tag"].(string); ok {
+				existingTags[t] = true
+			}
+		}
+	}
+	var conflicts []string
+	for _, cfg := range configs {
+		if existingTags[cfg.Tag] {
+			conflicts = append(conflicts, cfg.Tag)
+		}
+	}
+	if len(conflicts) > 0 {
+		jsonResponse(w, http.StatusConflict, map[string]interface{}{
+			"error": "Tag(s) already exist: " + strings.Join(conflicts, ", "),
+		})
+		return
+	}
+
+	for _, cfg := range configs {
+		cfgMap := make(map[string]interface{})
+		b, _ := json.Marshal(cfg)
+		_ = json.Unmarshal(b, &cfgMap)
+		nodes = append(nodes, cfgMap)
+	}
+	registerNodeGroup(&state, tagsOfWireGuardConfigs(configs), req.Prefix)
+	if state.DefaultWarpGroup == "" {
+		state.DefaultWarpGroup = req.Prefix
+	}
+	if err := writeState(state); err != nil {
+		log.Printf("createWarpGroupHandler: failed to persist state.json: %v", err)
+	}
+
+	var tmpl map[string]interface{}
+	if err := readJSON(templateFile, &tmpl); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to read template.json"})
+		return
+	}
+	if err := applyChangeFromStruct(tmpl, nodes); err != nil {
+		log.Printf("createWarpGroupHandler: %v", err)
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("Created group %q with %d endpoint node(s)", req.Prefix, len(configs)),
+		"tag":     req.Prefix,
+	})
+}
+
+// ---------------------------------------------------------------------
+// s6-overlay: لیست/کنترل سرویس‌ها + tail زنده‌ی لاگ (بدون نیاز به نگهداری فایل)
+// ---------------------------------------------------------------------
+//
+// فرض: این manager خودش زیر s6-overlay (v3) و با کاربر root اجرا می‌شود، و
+// سرویس‌های longrun زیر /run/service/<name> سوپروایز می‌شوند (مسیر استاندارد
+// s6-rc). کنترل از طریق باینری‌های خط‌فرمان s6 (s6-svc/s6-svstat) انجام
+// می‌شود — نه هیچ کتابخانه‌ی جدید.
+//
+// لاگ زنده: چون فعلاً هیچ سرویسی logger ندارد، این فقط برای سرویس‌هایی کار
+// می‌کند که طبق راهنما یک companion "<name>-log" با s6-log روی /run/log/<name>
+// (tmpfs، نه دیسک) wire شده باشد. چون فقط نمایش لحظه‌ای مهم است نه تاریخچه،
+// موقع باز کردن استریم مستقیم seek به انتهای فایل می‌زنیم — یعنی فقط خطوط
+// جدید از همین لحظه به بعد دیده می‌شوند، نه چیزی که از قبل نوشته شده.
+
+var (
+	s6ServiceDir = envOrDefault("S6_SERVICE_DIR", "/run/service")
+	s6LogDir     = envOrDefault("S6_LOG_DIR", "/run/log")
+)
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+type S6ServiceView struct {
+	Name      string `json:"name"`
+	Up        bool   `json:"up"`
+	Pid       int    `json:"pid,omitempty"`
+	UptimeSec int64  `json:"uptime_sec"`
+	HasLogger bool   `json:"has_logger"`
+}
+
+// listS6Services دایرکتوری‌های زیر s6ServiceDir را که واقعاً supervise فعال
+// دارند (یعنی زیرپوشه‌ی supervise/control دارند) به‌عنوان سرویس‌های longrun
+// واقعی برمی‌گرداند — سرویس‌های oneshot/داخلی s6-overlay را کنار می‌گذارد.
+func listS6Services() ([]S6ServiceView, error) {
+	entries, err := os.ReadDir(s6ServiceDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []S6ServiceView
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		name := e.Name()
+		svPath := filepath.Join(s6ServiceDir, name)
+		if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err != nil {
+			continue // نه یک longrun سوپروایزشده (مثلاً یک oneshot گذراست)
+		}
+		view := S6ServiceView{Name: name}
+		if up, pid, uptime, ok := s6Status(svPath); ok {
+			view.Up = up
+			view.Pid = pid
+			view.UptimeSec = uptime
+		}
+		if _, err := os.Stat(filepath.Join(s6LogDir, name, "current")); err == nil {
+			view.HasLogger = true
+		}
+		out = append(out, view)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// s6Status از s6-svstat خروجی machine-readable می‌گیرد (-o up,pid,uptime).
+func s6Status(svPath string) (up bool, pid int, uptimeSec int64, ok bool) {
+	out, err := exec.Command("s6-svstat", "-o", "up,pid,uptime", svPath).Output()
+	if err != nil {
+		return false, 0, 0, false
+	}
+	fields := strings.Split(strings.TrimSpace(string(out)), ",")
+	if len(fields) < 3 {
+		return false, 0, 0, false
+	}
+	up = strings.TrimSpace(fields[0]) == "true"
+	if p, err := strconv.Atoi(strings.TrimSpace(fields[1])); err == nil {
+		pid = p
+	}
+	if u, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64); err == nil {
+		uptimeSec = u
+	}
+	return up, pid, uptimeSec, true
+}
+
+// isValidS6ServiceName جلوی path traversal/command injection را از طریق نام
+// سرویس می‌گیرد (همه‌جا این تابع را قبل از ساختن مسیر یا اجرای s6-svc صدا بزن).
+var s6NameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+func isValidS6ServiceName(name string) bool {
+	if !s6NameRe.MatchString(name) {
+		return false
+	}
+	return !strings.Contains(name, "..")
+}
+
+// s6ServicesSubrouter مسیرهای زیر /api/s6/services/{name}/... را بین
+// tailS6LogHandler (GET .../logs) و controlS6ServiceHandler (POST
+// .../start|stop|restart) تقسیم می‌کند — net/http استاندارد path param
+// ندارد، این یک dispatcher دستی و سبک است.
+func s6ServicesSubrouter(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) == 5 && parts[4] == "logs" && r.Method == http.MethodGet {
+		tailS6LogHandler(w, r)
+		return
+	}
+	if len(parts) == 5 && r.Method == http.MethodPost {
+		controlS6ServiceHandler(w, r)
+		return
+	}
+	jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": "Not found"})
+}
+
+func listS6ServicesHandler(w http.ResponseWriter, r *http.Request) {
+	services, err := listS6Services()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": "Failed to read " + s6ServiceDir + ": " + err.Error() + " (is this running under s6-overlay?)",
+		})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"services": services})
+}
+
+// controlS6ServiceHandler: POST /api/s6/services/{name}/{start|stop|restart}
+func controlS6ServiceHandler(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api","s6","services",name,action]
+	if len(parts) != 5 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid path"})
+		return
+	}
+	name, action := parts[3], parts[4]
+	if !isValidS6ServiceName(name) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid service name"})
+		return
+	}
+	svPath := filepath.Join(s6ServiceDir, name)
+	if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err != nil {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found under %s", name, s6ServiceDir)})
+		return
+	}
+
+	var flag string
+	switch action {
+	case "start":
+		flag = "-u"
+	case "stop":
+		flag = "-d"
+	case "restart":
+		flag = "-r"
+	default:
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "action must be start, stop, or restart"})
+		return
+	}
+
+	out, err := exec.Command("s6-svc", flag, svPath).CombinedOutput()
+	if err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": fmt.Sprintf("s6-svc %s failed: %v (%s)", flag, err, strings.TrimSpace(string(out))),
+		})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("%s: %s issued", name, action)})
+}
+
+// tailS6LogHandler: GET /api/s6/services/{name}/logs — Server-Sent Events.
+// فایل current را از انتها باز می‌کند (فقط لحظه‌ی به‌بعد، بدون تاریخچه) و هر
+// خط جدید را به‌محض نوشته‌شدن به کلاینت push می‌کند؛ چیزی روی دیسک نگه
+// نمی‌داریم و خودمان هم فایلی نمی‌سازیم — فقط می‌خوانیم.
+func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api","s6","services",name,"logs"]
+	if len(parts) != 5 || parts[4] != "logs" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	name := parts[3]
+	if !isValidS6ServiceName(name) {
+		http.Error(w, "Invalid service name", http.StatusBadRequest)
+		return
+	}
+
+	logPath := filepath.Join(s6LogDir, name, "current")
+	f, err := os.Open(logPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("No live logger for %q at %s (see setup guide to wire s6-log for this service)", name, logPath), http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// از انتهای فایل شروع می‌کنیم — فقط چیزی که از این لحظه به بعد نوشته
+	// می‌شود دیده می‌شود، مطابق نیاز "فقط لحظه‌ای، بدون تاریخچه".
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		http.Error(w, "Seek failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "event: ready\ndata: watching %s\n\n", name)
+	flusher.Flush()
+
+	reader := bufio.NewReader(f)
+	ctx := r.Context()
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		case <-ticker.C:
+			for {
+				line, err := reader.ReadString('\n')
+				if line != "" {
+					for _, part := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
+						fmt.Fprintf(w, "data: %s\n", part)
+					}
+					fmt.Fprint(w, "\n")
+					flusher.Flush()
+				}
+				if err != nil {
+					break // به EOF رسیدیم؛ منتظر tick بعدی برای دیتای بیشتر می‌مانیم
+				}
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -9331,9 +10800,17 @@ func main() {
 	http.HandleFunc("/api/warp/endpoint/ping_current", requireAuth(requireMethod(http.MethodPost, pingCurrentWarpEndpointHandler)))
 	http.HandleFunc("/api/warp/endpoint/backups", requireAuth(requireMethod(http.MethodGet, getWarpBackupsHandler)))
 	http.HandleFunc("/api/warp/endpoint/test_backups", requireAuth(requireMethod(http.MethodPost, testWarpBackupsHandler)))
+	http.HandleFunc("/api/warp/endpoint/test_backups/stream", requireAuth(requireMethod(http.MethodGet, warpTestStreamHandler)))
+	http.HandleFunc("/api/warp/endpoint/test_backups/stop", requireAuth(requireMethod(http.MethodPost, warpTestStopHandler)))
 	http.HandleFunc("/api/warp/endpoint/scan_batch", requireAuth(requireMethod(http.MethodPost, scanWarpBatchHandler)))
 	http.HandleFunc("/api/warp/endpoint/apply", requireAuth(requireMethod(http.MethodPost, applyWarpEndpointHandler)))
 	http.HandleFunc("/api/warp/endpoint/reset", requireAuth(requireMethod(http.MethodPost, resetWarpEndpointHandler)))
+	http.HandleFunc("/api/warp/endpoint/create_group", requireAuth(requireMethod(http.MethodPost, createWarpGroupHandler)))
+	http.HandleFunc("/api/warp/endpoint/apply_selected_to_group", requireAuth(requireMethod(http.MethodPost, applySelectedToGroupHandler)))
+	http.HandleFunc("/api/outbounds", requireAuth(requireMethod(http.MethodGet, listOutboundsHandler)))
+	http.HandleFunc("/api/set_node_detour", requireAuth(requireMethod(http.MethodPost, setNodeDetourHandler)))
+	http.HandleFunc("/api/s6/services", requireAuth(requireMethod(http.MethodGet, listS6ServicesHandler)))
+	http.HandleFunc("/api/s6/services/", requireAuth(s6ServicesSubrouter))
 	http.HandleFunc("/api/backup/settings", requireAuth(settingsMethodRouter(backupSettingsHandler, updateBackupSettingsHandler)))
 	http.HandleFunc("/api/backup/run", requireAuth(requireMethod(http.MethodPost, backupRunHandler)))
 	http.HandleFunc("/api/backup/restore", requireAuth(requireMethod(http.MethodPost, backupRestoreHandler)))
@@ -9493,22 +10970,165 @@ func generateBatchWarpCandidates(count int, excluded map[string]bool, ipType str
 	return candidates, backupsMap
 }
 
-func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType string) ([]WarpScanItem, int, error) {
+// scanBatchWarpEndpoints نودهای wireguard را تست می‌کند. اگر scopeTag پر باشد
+// فقط همان یک نود، و اگر scopeGroup پر باشد فقط نودهای همان گروه تست می‌شوند؛
+// وقتی هر دو خالی باشند (رفتار قدیمی) همه‌ی نودهای WARP تست می‌شوند.
+// برای نودهای موجود (batchSize<=0)، هر نود با اکانت واقعی خودش (private_key،
+// address، peer کامل) تست می‌شود، نه با اکانتِ اولین نودِ کل فایل — قبلاً همه‌ی
+// اندپوینت‌ها (حتی از گروه‌های دیگر) با اکانت اولین نود پیدا‌شده تست می‌شدند که
+// برای اکانت‌های WARP متفاوت نتیجه‌ی نادرست می‌داد.
+// runSingBoxDelayTestBatch یک کانفیگ موقت sing-box (شامل endpointNodes و یک
+// گروه urltest که همه‌ی outboundTags را دربر می‌گیرد) را اجرا می‌کند، تست
+// delay را برای همه‌ی تگ‌ها هم‌زمان trigger می‌کند و نتیجه را برمی‌گرداند.
+// singboxBin از قبل باید پیدا شده باشد (پیدا نشدنش را تابع فراخوان چک می‌کند).
+func runSingBoxDelayTestBatch(singboxBin string, endpointNodes []map[string]interface{}, outboundTags []string) (map[string]int, error) {
+	outbounds := []map[string]interface{}{
+		{
+			"type":      "urltest",
+			"tag":       "test_urltest",
+			"outbounds": outboundTags,
+			"url":       "http://cp.cloudflare.com/generate_204",
+			"interval":  "3m",
+		},
+	}
+	apiPort := 9095 + mathrand.Intn(2000)
+	cfg := map[string]interface{}{
+		"endpoints": endpointNodes,
+		"outbounds": outbounds,
+		"experimental": map[string]interface{}{
+			"clash_api": map[string]interface{}{
+				"external_controller": fmt.Sprintf("127.0.0.1:%d", apiPort),
+			},
+		},
+	}
+
+	tmpFile := filepath.Join(filepath.Dir(nodesFile), fmt.Sprintf("temp_warp_scan_%d_%d.json", os.Getpid(), time.Now().UnixNano()))
+	b, _ := json.MarshalIndent(cfg, "", "  ")
+	_ = os.WriteFile(tmpFile, b, 0644)
+	defer os.Remove(tmpFile)
+
+	cmd := exec.Command(singboxBin, "run", "-c", tmpFile)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start temporary sing-box for scanning: %w", err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	time.Sleep(2 * time.Second)
+
+	// Trigger delay test
+	testReqURL := fmt.Sprintf("http://127.0.0.1:%d/proxies/test_urltest/delay?timeout=3000&url=http://cp.cloudflare.com/generate_204", apiPort)
+	if testResp, err := http.Get(testReqURL); err == nil {
+		testResp.Body.Close()
+	}
+
+	// Wait for the background delay test to complete (timeout is 3000ms)
+	time.Sleep(3500 * time.Millisecond)
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/proxies", apiPort))
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach temporary clash api: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Proxies map[string]struct {
+			History []struct {
+				Delay int `json:"delay"`
+			} `json:"history"`
+		} `json:"proxies"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode proxies api response: %w", err)
+	}
+
+	out := make(map[string]int)
+	for _, tag := range outboundTags {
+		if p, ok := apiResp.Proxies[tag]; ok && len(p.History) > 0 {
+			if d := p.History[len(p.History)-1].Delay; d > 0 {
+				out[tag] = d
+			}
+		}
+	}
+	return out, nil
+}
+
+// buildWarpTestPlan نودهای هدف را بر اساس scopeTag/scopeGroup پیدا می‌کند و
+// endpointNodes/outboundTags/endpoints آماده برای تست (یا کشف کاندیدهای جدید
+// وقتی batchSize>0) را می‌سازد. هم scanBatchWarpEndpoints (مسیر قدیمی، یک‌جا)
+// و هم warpTestStreamHandler (مسیر جدید، پخش تدریجی نتایج) از این استفاده می‌کنند.
+func buildWarpTestPlan(batchSize int, excludedEndpoints []string, ipType string, scopeTag string, scopeGroup string) (endpointNodes []map[string]interface{}, outboundTags []string, endpoints []string, backupsMap map[string]bool, verifyMode bool, err error) {
 	mu.Lock()
 	var nodes []map[string]interface{}
 	_ = readJSON(nodesFile, &nodes)
 	mu.Unlock()
 
-	var sampleWarp map[string]interface{}
+	var nodeGroups map[string]string
+	if scopeGroup != "" {
+		nodeGroups = readStateOrDefault().NodeGroups
+	}
+
+	var scopedNodes []map[string]interface{}
 	for _, n := range nodes {
-		if t, ok := n["type"].(string); ok && t == "wireguard" {
+		t, _ := n["type"].(string)
+		if t != "wireguard" {
+			continue
+		}
+		if scopeTag != "" {
+			if tag, _ := n["tag"].(string); tag == scopeTag {
+				scopedNodes = append(scopedNodes, n)
+			}
+			continue
+		}
+		if scopeGroup != "" {
+			tag, _ := n["tag"].(string)
+			if prefix, grouped := groupPrefixForTag(nodeGroups, tag); grouped && prefix == scopeGroup {
+				scopedNodes = append(scopedNodes, n)
+			}
+			continue
+		}
+		scopedNodes = append(scopedNodes, n)
+	}
+
+	if (scopeTag != "" || scopeGroup != "") && len(scopedNodes) == 0 {
+		if scopeTag != "" {
+			err = fmt.Errorf("WARP node %q not found", scopeTag)
+		} else {
+			err = fmt.Errorf("WARP group %q not found", scopeGroup)
+		}
+		return
+	}
+
+	var sampleWarp map[string]interface{}
+	var existingEndpoints []string
+	// nodeByEndpoint نگه می‌دارد که هر اندپوینتِ موجود متعلق به کدام نود (با
+	// کدام اکانت) است، تا در حالت verify هر نود با اکانت واقعی خودش تست شود.
+	nodeByEndpoint := map[string]map[string]interface{}{}
+	for _, n := range scopedNodes {
+		if sampleWarp == nil {
 			sampleWarp = n
-			break
+		}
+		if peers, ok := n["peers"].([]interface{}); ok && len(peers) > 0 {
+			if p, ok := peers[0].(map[string]interface{}); ok {
+				addr, _ := p["address"].(string)
+				port, _ := p["port"].(float64)
+				if addr != "" {
+					ep := fmt.Sprintf("%s:%d", addr, int(port))
+					existingEndpoints = append(existingEndpoints, ep)
+					if _, exists := nodeByEndpoint[ep]; !exists {
+						nodeByEndpoint[ep] = n
+					}
+				}
+			}
 		}
 	}
 
 	if sampleWarp == nil {
-		return nil, 0, fmt.Errorf("no existing WARP node found to extract account details for testing")
+		err = fmt.Errorf("no existing WARP node found to extract account details for testing")
+		return
 	}
 
 	excludedMap := make(map[string]bool)
@@ -9516,13 +11136,22 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 		excludedMap[ep] = true
 	}
 
-	endpoints, backupsMap := generateBatchWarpCandidates(batchSize, excludedMap, ipType)
-	if len(endpoints) == 0 {
-		return []WarpScanItem{}, 0, nil
+	verifyMode = batchSize <= 0
+	if !verifyMode {
+		endpoints, backupsMap = generateBatchWarpCandidates(batchSize, excludedMap, ipType)
+	} else {
+		backupsMap = make(map[string]bool)
+		for _, ep := range existingEndpoints {
+			if !excludedMap[ep] {
+				endpoints = append(endpoints, ep)
+				backupsMap[ep] = true
+			}
+		}
 	}
 
-	var endpointNodes []map[string]interface{}
-	var outboundTags []string
+	if len(endpoints) == 0 {
+		return
+	}
 
 	var peerTemplate map[string]interface{}
 	if peers, ok := sampleWarp["peers"].([]interface{}); ok && len(peers) > 0 {
@@ -9534,6 +11163,16 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 	for i, ep := range endpoints {
 		tag := fmt.Sprintf("WARP_TEST_%d", i)
 		outboundTags = append(outboundTags, tag)
+
+		// اگر این اندپوینت متعلق به یک نودِ واقعیِ موجود است، خودِ همان نود
+		// (با اکانت خودش) را کلون کن — نه یک تمپلیت قرض‌گرفته از نود دیگر.
+		if srcNode, ok := nodeByEndpoint[ep]; ok {
+			clone := cloneMap(srcNode)
+			clone["tag"] = tag
+			delete(clone, "detour") // در کانفیگ تستِ مستقل، outbound دیگری برای detour وجود ندارد
+			endpointNodes = append(endpointNodes, clone)
+			continue
+		}
 
 		host, port, _ := parseEndpoint(ep)
 
@@ -9572,74 +11211,217 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 		endpointNodes = append(endpointNodes, ob)
 	}
 
-	// Add urltest outbound
-	outbounds := []map[string]interface{}{
-		{
-			"type":      "urltest",
-			"tag":       "test_urltest",
-			"outbounds": outboundTags,
-			"url":       "http://cp.cloudflare.com/generate_204",
-			"interval":  "3m",
-		},
+	return
+}
+
+// warpTestCancelRegistry اجازه می‌دهد کلاینت با فرستادن همان id به
+// /api/warp/endpoint/test_backups/stop، یک تست جاری در warpTestStreamHandler
+// را وسط کار متوقف کند.
+var (
+	warpTestCancelMu  sync.Mutex
+	warpTestCancelReg = map[string]*atomic.Bool{}
+)
+
+func registerWarpTestCancel(id string) *atomic.Bool {
+	flag := &atomic.Bool{}
+	if id == "" {
+		return flag
 	}
-	apiPort := 9095
-	cfg := map[string]interface{}{
-		"endpoints": endpointNodes,
-		"outbounds": outbounds,
-		"experimental": map[string]interface{}{
-			"clash_api": map[string]interface{}{
-				"external_controller": fmt.Sprintf("127.0.0.1:%d", apiPort),
-			},
-		},
+	warpTestCancelMu.Lock()
+	warpTestCancelReg[id] = flag
+	warpTestCancelMu.Unlock()
+	return flag
+}
+
+func unregisterWarpTestCancel(id string) {
+	if id == "" {
+		return
+	}
+	warpTestCancelMu.Lock()
+	delete(warpTestCancelReg, id)
+	warpTestCancelMu.Unlock()
+}
+
+// warpTestStopHandler: POST /api/warp/endpoint/test_backups/stop {"id": "..."}
+// تست جاری با همان id را (اگر هنوز در حال اجراست) در همان لحظه متوقف می‌کند.
+func warpTestStopHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	id := strings.TrimSpace(req.ID)
+
+	warpTestCancelMu.Lock()
+	flag, ok := warpTestCancelReg[id]
+	warpTestCancelMu.Unlock()
+
+	if ok {
+		flag.Store(true)
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"stopped": ok})
+}
+
+// warpTestStreamHandler: GET /api/warp/endpoint/test_backups/stream?tag=...&group=...&id=...
+// همان تست verify (نودهای موجود) را انجام می‌دهد اما به‌جای برگرداندن یک‌جای
+// همه‌ی نتایج در پایان، هر نتیجه را به‌محض آماده‌شدن (Server-Sent Events) پخش
+// می‌کند — چون تعداد پراکسی‌ها می‌تواند زیاد باشد و تست هر کدام (به‌خاطر
+// تک‌به‌تک‌بودنِ لازم برای اکانت مشترک) چند ثانیه طول می‌کشد. با id، کلاینت
+// می‌تواند از طریق /stop این تست را وسط کار متوقف کند.
+func warpTestStreamHandler(w http.ResponseWriter, r *http.Request) {
+	scopeTag := strings.TrimSpace(r.URL.Query().Get("tag"))
+	scopeGroup := strings.TrimSpace(r.URL.Query().Get("group"))
+	testID := strings.TrimSpace(r.URL.Query().Get("id"))
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	sendEvent := func(event string, payload interface{}) {
+		b, _ := json.Marshal(payload)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+		flusher.Flush()
 	}
 
-	tmpFile := filepath.Join(filepath.Dir(nodesFile), "temp_warp_scan.json")
-	b, _ := json.MarshalIndent(cfg, "", "  ")
-	_ = os.WriteFile(tmpFile, b, 0644)
-	defer os.Remove(tmpFile)
+	endpointNodes, outboundTags, endpoints, backupsMap, _, err := buildWarpTestPlan(0, nil, "both", scopeTag, scopeGroup)
+	if err != nil {
+		sendEvent("error", map[string]string{"error": err.Error()})
+		return
+	}
+	if len(endpoints) == 0 {
+		sendEvent("done", map[string]interface{}{"tested": 0, "found": 0, "stopped": false})
+		return
+	}
+
+	singboxBin, _ := findSingBox()
+	if singboxBin == "" {
+		sendEvent("error", map[string]string{"error": "sing-box binary not found"})
+		return
+	}
+
+	cancelFlag := registerWarpTestCancel(testID)
+	defer unregisterWarpTestCancel(testID)
+
+	sendEvent("start", map[string]interface{}{"total": len(endpoints)})
+
+	state := readStateOrDefault()
+	backupChanged := false
+	existingBackups := make(map[string]bool)
+	for _, b := range state.BackupWarpEndpoints {
+		existingBackups[b] = true
+	}
+
+	ctx := r.Context()
+	found := 0
+	stopped := false
+	tested := 0
+
+	// نودهای موجود (به‌خصوص داخل یک گروه) تقریباً همیشه یک اکانت WARP مشترک
+	// دارند؛ برای جلوگیری از تداخل چند handshake هم‌زمان با Cloudflare، مثل
+	// scanBatchWarpEndpoints این‌ها را هم جداگانه و به‌ترتیب تست می‌کنیم —
+	// همین توالی است که امکان پخش تدریجی و توقف وسط کار را هم می‌دهد.
+	for idx, ob := range endpointNodes {
+		if cancelFlag.Load() || ctx.Err() != nil {
+			stopped = true
+			break
+		}
+
+		ep := endpoints[idx]
+		tag := outboundTags[idx]
+
+		single, serr := runSingBoxDelayTestBatch(singboxBin, []map[string]interface{}{ob}, []string{tag})
+		tested++
+
+		if cancelFlag.Load() || ctx.Err() != nil {
+			stopped = true
+			break
+		}
+
+		if serr != nil {
+			log.Printf("warpTestStreamHandler: sequential test failed for %v: %v", tag, serr)
+			sendEvent("result", map[string]interface{}{
+				"index": idx, "total": len(endpoints), "endpoint": ep, "ok": false,
+			})
+			continue
+		}
+
+		delay, hasDelay := single[tag]
+		if !hasDelay || delay <= 0 {
+			sendEvent("result", map[string]interface{}{
+				"index": idx, "total": len(endpoints), "endpoint": ep, "ok": false,
+			})
+			continue
+		}
+
+		found++
+		isDefault := ep == "engage.cloudflareclient.com:2408"
+		sendEvent("result", map[string]interface{}{
+			"index": idx, "total": len(endpoints), "endpoint": ep, "ok": true,
+			"delay": delay, "isDefault": isDefault, "isBackup": backupsMap[ep],
+		})
+
+		if !existingBackups[ep] && !isDefault {
+			state.BackupWarpEndpoints = append(state.BackupWarpEndpoints, ep)
+			existingBackups[ep] = true
+			backupChanged = true
+		}
+	}
+
+	if backupChanged {
+		_ = writeState(state)
+	}
+
+	sendEvent("done", map[string]interface{}{"tested": tested, "found": found, "stopped": stopped})
+}
+
+
+func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType string, scopeTag string, scopeGroup string) ([]WarpScanItem, int, error) {
+	endpointNodes, outboundTags, endpoints, backupsMap, verifyMode, err := buildWarpTestPlan(batchSize, excludedEndpoints, ipType, scopeTag, scopeGroup)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(endpoints) == 0 {
+		return []WarpScanItem{}, 0, nil
+	}
 
 	singboxBin, _ := findSingBox()
 	if singboxBin == "" {
 		return nil, 0, fmt.Errorf("sing-box binary not found")
 	}
-	cmd := exec.Command(singboxBin, "run", "-c", tmpFile)
-	if err := cmd.Start(); err != nil {
-		return nil, 0, fmt.Errorf("failed to start temporary sing-box for scanning: %w", err)
-	}
 
-	defer func() {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
+	var delayByTag map[string]int
+	if verifyMode {
+		// نودهای موجود (به‌خصوص داخل یک گروه) تقریباً همیشه یک اکانت WARP
+		// مشترک دارند (همان private_key و همان آدرس داخلی تانل). اگر همه‌شان
+		// را هم‌زمان در یک sing-box با هم تست کنیم، چند handshake هم‌زمان با
+		// یک اکانت به Cloudflare می‌رود؛ Cloudflare معمولاً فقط آخرین session
+		// را زنده نگه می‌دارد و بقیه timeout می‌خورند — دقیقاً همان چیزی که در
+		// تست تک‌تک (فقط یک handshake) دیده نمی‌شود. برای رفع این تداخل، در
+		// حالت verify هر نود را جداگانه و به‌ترتیب تست می‌کنیم.
+		delayByTag = make(map[string]int)
+		for idx, ob := range endpointNodes {
+			single, serr := runSingBoxDelayTestBatch(singboxBin, []map[string]interface{}{ob}, []string{outboundTags[idx]})
+			if serr != nil {
+				log.Printf("scanBatchWarpEndpoints: sequential test failed for %v: %v", outboundTags[idx], serr)
+				continue // این یکی تست نشد؛ به‌جای شکست کل عملیات، رد می‌شویم و بقیه را ادامه می‌دهیم
+			}
+			for k, v := range single {
+				delayByTag[k] = v
+			}
 		}
-	}()
-
-	time.Sleep(2 * time.Second)
-
-	// Trigger delay test
-	testReqURL := fmt.Sprintf("http://127.0.0.1:%d/proxies/test_urltest/delay?timeout=3000&url=http://cp.cloudflare.com/generate_204", apiPort)
-	if testResp, err := http.Get(testReqURL); err == nil {
-		testResp.Body.Close()
-	}
-
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/proxies", apiPort))
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to reach temporary clash api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var apiResp struct {
-		Proxies map[string]struct {
-			Now     string   `json:"now"`
-			All     []string `json:"all"`
-			History []struct {
-				Time  string `json:"time"`
-				Delay int    `json:"delay"`
-			} `json:"history"`
-		} `json:"proxies"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, 0, fmt.Errorf("failed to decode proxies api response: %w", err)
+	} else {
+		// کشف اندپوینت‌های جدید (کاندیدهای تصادفی، نه نودهای ثبت‌شده): این‌ها
+		// اکانتِ اختصاصیِ خودشان را ندارند و صرفاً برای پیدا کردن IPهای سالم
+		// تست می‌شوند، پس تست هم‌زمان مثل قبل مشکلی ایجاد نمی‌کند.
+		delayByTag, err = runSingBoxDelayTestBatch(singboxBin, endpointNodes, outboundTags)
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 
 	var validResults []WarpScanItem
@@ -9652,22 +11434,19 @@ func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType st
 
 	for i, ep := range endpoints {
 		tag := fmt.Sprintf("WARP_TEST_%d", i)
-		if p, ok := apiResp.Proxies[tag]; ok && len(p.History) > 0 {
-			lastH := p.History[len(p.History)-1]
-			if lastH.Delay > 0 {
-				validResults = append(validResults, WarpScanItem{
-					Endpoint:  ep,
-					Delay:     lastH.Delay,
-					IsDefault: ep == "engage.cloudflareclient.com:2408",
-					IsBackup:  backupsMap[ep],
-				})
+		if delay, ok := delayByTag[tag]; ok && delay > 0 {
+			validResults = append(validResults, WarpScanItem{
+				Endpoint:  ep,
+				Delay:     delay,
+				IsDefault: ep == "engage.cloudflareclient.com:2408",
+				IsBackup:  backupsMap[ep],
+			})
 
-				// Save as backup if not already present
-				if !existingBackups[ep] && ep != "engage.cloudflareclient.com:2408" {
-					state.BackupWarpEndpoints = append(state.BackupWarpEndpoints, ep)
-					existingBackups[ep] = true
-					backupChanged = true
-				}
+			// Save as backup if not already present
+			if !existingBackups[ep] && ep != "engage.cloudflareclient.com:2408" {
+				state.BackupWarpEndpoints = append(state.BackupWarpEndpoints, ep)
+				existingBackups[ep] = true
+				backupChanged = true
 			}
 		}
 	}
@@ -9698,7 +11477,7 @@ func scanWarpBatchHandler(w http.ResponseWriter, r *http.Request) {
 		req.IPType = "both"
 	}
 
-	results, testedCount, err := scanBatchWarpEndpoints(req.BatchSize, req.Excluded, req.IPType)
+	results, testedCount, err := scanBatchWarpEndpoints(req.BatchSize, req.Excluded, req.IPType, "", "")
 	if err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
 		return
