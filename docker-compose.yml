@@ -9,6 +9,7 @@ services:
         zai_src: ${ZAI_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
         deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
+        flaresolverr_src: "${FLARESOLVERR_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
         OMNIROUTE_IMAGE: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}
