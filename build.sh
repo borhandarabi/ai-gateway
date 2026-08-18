@@ -9,7 +9,7 @@ ZAI_REPO="${ZAI_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}"
 KIMI_REPO="${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}"
 DEEPSEEK_REPO="${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}"
 FLARESOLVERR_REPO="${FLARESOLVERR_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
-QWEN2API_REPO="${QWEN2API_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
+QWEN2API_REPO="${QWEN2API_REPO:-https://github.com/XxxXTeam/Qwen2API_Go.git#main}"
 # OmniRoute is pulled as a prebuilt base image, not built from source 
 OMNIROUTE_IMAGE="${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}"
 TAG="${TAG:-ai-gateway:local}"
