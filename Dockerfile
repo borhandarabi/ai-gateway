@@ -252,13 +252,15 @@ LABEL org.opencontainers.image.title="ai-gateway" \
 # step), so nodejs/npm are purged again immediately after use -- they'd
 # otherwise just be dead weight in the final image since OmniRoute (the only
 # service that ever needed a Node runtime) is gone.
-RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+# install Node.js 20, use nodesource
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && npm install -g playwright playwright-core@1.61.1 \
     && npx playwright install --with-deps chromium \
     && npm uninstall -g playwright \
-    && apt-get purge -y --auto-remove nodejs npm \
+    && apt-get purge -y --auto-remove curl gnupg nodejs npm \
     && rm -rf /root/.npm /root/.cache/node
 
 # --- application artifacts ---
