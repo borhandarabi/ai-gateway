@@ -13,7 +13,6 @@ services:
         flaresolverr_src: "${FLARESOLVERR_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
       args:
         MIHOMO_VERSION: ${MIHOMO_VERSION:-v1.19.27}
-        OMNIROUTE_IMAGE: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.49-web}
     image: ai-gateway:local
     container_name: ai-gateway
     restart: unless-stopped
@@ -26,7 +25,6 @@ services:
       - .env
     ports:
       - "${PROXY_PORT:-80}:${PROXY_PORT:-80}" # General Reverse Proxy
-      - "${OMNIROUTE_PORT:-20128}:${OMNIROUTE_PORT:-20128}"   # OmniRoute
       - "${MIMO_PORT:-3001}:${MIMO_PORT:-3001}"     # MimoApi
       - "${ZAI_PORT:-3002}:${ZAI_PORT:-3002}"     # zai-api / GlmApi
       - "${DEEPSEEK_PORT:-3005}:${DEEPSEEK_PORT:-3005}"     # DeepSeekApi
@@ -36,7 +34,6 @@ services:
       - "${MIXED_PORT:-7890}:${MIXED_PORT:-7890}"
       - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"     # mihomo mixed-port (SOCKS/HTTP)
     volumes:
-      - omniroute_data:/data/omniroute
       - mimo_data:/data/mimo
       - zai_data:/data/zai
       - grok2api_data:/data/grok2api
@@ -49,7 +46,6 @@ services:
       start_period: 30s
 
 volumes:
-  omniroute_data:
   mimo_data:
   zai_data:
   grok2api_data:

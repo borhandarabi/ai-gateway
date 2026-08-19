@@ -1,16 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
 # ai-gateway — single-image bundle of:
-#   - OmniRoute   (Node/Next.js)      : AI gateway / router UI + API
-#                                        -- uses the official published image
-#                                        (diegosouzapw/omniroute:latest-web) as
-#                                        the base of the final stage instead of
-#                                        building from source: it's multi-arch
-#                                        (amd64+arm64 confirmed), and it removes
-#                                        OmniRoute's memory-heavy Next.js/
-#                                        Turbopack build from our pipeline
-#                                        entirely (this was the repeated
-#                                        "cannot allocate memory" failure).
 #   - MimoApi     (Go)                : Mimo/Xiaomi provider proxy
 #   - zai-api     (Go, aka "GlmApi")  : Z.ai/GLM provider proxy
 #   - grok2api-go (Go + Node/Vite)    : Grok (xAI) provider proxy + dashboard
@@ -18,10 +8,9 @@
 #   - cloudflared (Go, prebuilt)      : optional Cloudflare Tunnel
 #
 # Each application stage below pulls its source from a *named build context*
-# pointing at the real upstream repo (except OmniRoute -- see above), so
-# `docker build` always extracts the current entrypoint/env/build-steps from
-# the source of truth instead of a locally vendored copy. Supply the
-# contexts with `--build-context`, e.g.:
+# pointing at the real upstream repo, so `docker build` always extracts the
+# current entrypoint/env/build-steps from the source of truth instead of a
+# locally vendored copy. Supply the contexts with `--build-context`, e.g.:
 #
 #   docker buildx build \
 #     --build-context mimo_src=https://github.com/hooshidev3/mimo-ai-proxy.git#main \
@@ -38,7 +27,6 @@
 # pass a local path instead, e.g. --build-context zai_src=./zai-local-checkout
 # so the image still builds for local testing.
 
-ARG OMNIROUTE_IMAGE=diegosouzapw/omniroute:3.8.49-web
 # Must match (or be newer than) main.go's defaultSingBoxVersion constant --
 # see the singbox-fetch stage below for why this is baked in at build time.
 ARG SINGBOX_VERSION=1.13.16
@@ -141,13 +129,16 @@ RUN --mount=type=cache,id=grok2api-go-mod,target=/go/pkg/mod,sharing=locked \
     go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/grok2api ./cmd/grok2api
 # entrypoint extracted as-is from the repo: docker/entrypoint.sh (copied below)
 
-# ───── su-exec (native build on the SAME base as the final image) ──────────
+# ───── su-exec (native build on the SAME base+release as the final image) ──
 # grok2api-go's upstream image is Alpine and uses the Alpine `su-exec` package
 # to drop from root to its app user inside its own entrypoint.sh. Our final
-# image is Debian (node:26-trixie-slim) which has no such package, so we
+# image is Debian (debian:bookworm-slim) which has no such package, so we
 # build the same tiny, well-known su-exec (ncopa/su-exec) natively here
-# instead of trying to lift an Alpine/musl binary onto glibc.
-FROM node:26-trixie-slim AS su-exec-builder
+# instead of trying to lift an Alpine/musl binary onto glibc. Built on the
+# exact same Debian release (bookworm) as the runtime stage, not just "some
+# Debian" -- a binary built against a newer release's glibc (e.g. trixie)
+# can require symbol versions bookworm's older glibc doesn't have.
+FROM debian:bookworm-slim AS su-exec-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -204,15 +195,24 @@ RUN apk add --no-cache curl ca-certificates tar \
     && rm -rf /tmp/sing-box.tar.gz "/tmp/${SB_DIR}"
 
 # ══════════════════════════ Final runtime image ═════════════════════════════
-# Base = the official OmniRoute image itself (see ARG OMNIROUTE_IMAGE above).
-# Its own last layers are `USER node` -- override back to root immediately so
-# our own RUN/COPY steps (s6-overlay, apt packages, other services' users)
-# work; s6's /init needs to run as root anyway (singbox's TUN needs root/caps,
-# and each service that should run unprivileged -- grok2api, omniroute --
-# drops to its own user itself via su-exec inside its own s6 run script,
-# same pattern used throughout this image).
-FROM ${OMNIROUTE_IMAGE} AS runtime
-USER root
+# Base = plain debian:bookworm-slim, NOT a Node/Next.js image. OmniRoute (the
+# Node/Next.js service that used to be baked into this final stage's base
+# image) has been removed entirely -- it was the single biggest resident-
+# memory/CPU consumer in the image, and on constrained hosts (e.g. 2 vCPU /
+# 1 GB RAM) it was starving the Playwright/Chromium-using services (zai-api)
+# of enough memory to launch Chromium reliably, causing repeated crashes.
+#
+# debian:bookworm-slim is used (not alpine) because Playwright's own
+# downloaded Chromium build is glibc-linked and is only officially supported
+# on Debian/Ubuntu-family bases -- musl (Alpine) is not a supported target
+# for Playwright's browser binaries. bookworm-slim is the smallest/leanest
+# base in that officially-supported family, which keeps baseline memory/disk
+# usage as low as possible while still letting Chromium run correctly.
+# s6's /init needs to run as root anyway (singbox's TUN needs root/caps), and
+# each service that should run unprivileged -- grok2api, flaresolverr,
+# qwen2api -- drops to its own user itself via su-exec inside its own s6 run
+# script.
+FROM debian:bookworm-slim AS runtime
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
 ARG SINGBOX_VERSION
@@ -239,14 +239,29 @@ RUN set -eux; \
     rm -f /tmp/s6-noarch.tar.xz /tmp/s6-arch.tar.xz
 
 LABEL org.opencontainers.image.title="ai-gateway" \
-      org.opencontainers.image.description="OmniRoute + MimoApi + zai-api + singbox-manager + cloudflared, single image"
+      org.opencontainers.image.description="MimoApi + zai-api + kimi-api + deepseek-proxy + grok2api + qwen2api + flaresolverr + singbox-manager + cloudflared, single image"
 
-RUN npm install -g playwright playwright-core@1.61.1 && npx playwright install --with-deps
+# Node.js/npm here are build-time-only tools, used solely to pre-download the
+# Playwright-managed Chromium build (and its OS-level shared-lib deps) that
+# zai-api's playwright-go client launches at runtime -- installing only the
+# "chromium" browser (not the default chromium+firefox+webkit set) avoids
+# pulling in two browsers nothing in this image ever launches, which matters
+# on memory/disk-constrained hosts. playwright-go itself needs no system
+# Node/npm at runtime (it ships its own self-contained driver and just finds
+# the browser already cached under /root/.cache/ms-playwright from this
+# step), so nodejs/npm are purged again immediately after use -- they'd
+# otherwise just be dead weight in the final image since OmniRoute (the only
+# service that ever needed a Node runtime) is gone.
+RUN --mount=type=cache,id=apt-cache-rt,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lists-rt,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && npm install -g playwright playwright-core@1.61.1 \
+    && npx playwright install --with-deps chromium \
+    && npm uninstall -g playwright \
+    && apt-get purge -y --auto-remove nodejs npm \
+    && rm -rf /root/.npm /root/.cache/node
+
 # --- application artifacts ---
-# OmniRoute needs nothing here -- it's already fully baked into this base
-# image at /app (standalone Next.js build, better-sqlite3, healthcheck.mjs,
-# check-permissions.sh entrypoint), exactly as diegosouzapw published it.
-
 COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
@@ -289,8 +304,7 @@ RUN groupadd -g 10001 grok2api \
     && groupadd -g 10003 qwen2api \
     && useradd -u 10003 -g qwen2api -M -s /usr/sbin/nologin qwen2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
-    && chown -R node:node /data/omniroute \
+RUN mkdir -p /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && chown -R flaresolverr:flaresolverr /data/flaresolverr /opt/flaresolverr /tmp/rod /home/flaresolverr \
     && chown -R qwen2api:qwen2api /data/qwen2api /opt/qwen2api \
@@ -300,8 +314,7 @@ RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box 
 RUN mkdir -p /run/s6/container_environment \
     && printf '0.0.0.0' > /etc/s6-overlay/s6-rc.d/network-mode-init/BIND_ADDR_DEFAULT
 
-ENV OMNIROUTE_PORT=20128 \
-    MIMO_PORT=3003 \
+ENV MIMO_PORT=3003 \
     ZAI_PORT=3001 \
     KIMI_PORT=3002 \
     KIMI_ACCESS_TOKEN= \
@@ -319,7 +332,7 @@ ENV OMNIROUTE_PORT=20128 \
     QWEN2API_PORT=3006 \
     PROXY_PORT=80
 
-EXPOSE 80 20128 3000 3001 3002 8000 8191 9090 7890 3005 3006
+EXPOSE 80 3000 3001 3002 8000 8191 9090 7890 3005 3006
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]

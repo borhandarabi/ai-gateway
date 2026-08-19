@@ -106,7 +106,7 @@ var managedEnvKeys = []string{
 	"BIND_ADDR", "API_PORT", "PROXY_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR", "DEFAULT_SERVICES",
-	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
+	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
 	"MIMO_PROXY_PORT", "KIMI_PROXY_PORT", "DEEPSEEK_PROXY_PORT", "ZAI_PROXY_PORT", "GROK2API_PROXY_PORT",
 }
 
@@ -120,7 +120,6 @@ var managedEnvDefaults = map[string]string{
 	"CLOUDFLARED_INSTALL_DIR":  "bin",
 	"CLASH_API_PORT":           "9090",
 	"MIXED_PORT":               "7890",
-	"OMNIROUTE_PORT":           "20128",
 	"MIMO_PORT":                "3003",
 	"KIMI_PORT":                "3002",
 	"DEEPSEEK_PORT":            "3005",
@@ -3117,7 +3116,6 @@ const htmlContent = `<!DOCTYPE html>
     CLASH_SECRET: 'Clash API Secret (password)',
     CLASH_API_PORT: 'Clash / sing-box API port',
     MIXED_PORT: 'Mixed proxy port',
-    OMNIROUTE_PORT: 'OmniRoute port',
     MIMO_PORT: 'MimoApi port',
     KIMI_PORT: 'KimiApi port',
     DEEPSEEK_PORT: 'DeepSeekApi port',
@@ -9391,10 +9389,88 @@ type S6ServiceView struct {
 	HasLogger bool   `json:"has_logger"`
 }
 
-// listS6Services دایرکتوری‌های زیر s6ServiceDir را که واقعاً supervise فعال
-// دارند (یعنی زیرپوشه‌ی supervise/control دارند) به‌عنوان سرویس‌های longrun
-// واقعی برمی‌گرداند — سرویس‌های oneshot/داخلی s6-overlay را کنار می‌گذارد.
+// s6SourceDir مسیر منبعِ کامپایل‌نشده‌ی تعاریف سرویس‌هاست (همان چیزی که در
+// build image کپی می‌شود: /etc/s6-overlay/s6-rc.d). برخلاف s6ServiceDir که
+// فقط چیزی را نشان می‌دهد که *همین الان* زیر نظر s6-supervise زنده است، این
+// دایرکتوری فهرست واقعیِ سرویس‌هایی است که در ایمیج «نصب» شده‌اند و باید در
+// داشبورد دیده شوند — حتی اگر هنوز بالا نیامده‌اند یا crash کرده باشند.
+var s6SourceDir = envOrDefault("S6_SOURCE_DIR", "/etc/s6-overlay/s6-rc.d")
+
+// canonicalS6ServiceNames نام سرویس‌های عضو bundle «user» را از
+// s6SourceDir/user/contents.d می‌خواند — همان فهرستی که در build-time واقعاً
+// در ایمیج قرار گرفته، صرف‌نظر از اینکه s6-rc فعلاً برایشان supervise tree
+// ساخته یا نه.
+func canonicalS6ServiceNames() ([]string, error) {
+	contentsDir := filepath.Join(s6SourceDir, "user", "contents.d")
+	entries, err := os.ReadDir(contentsDir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// s6ServiceIsLongrun فایل type سرویس را در s6SourceDir می‌خواند تا oneshot ها
+// (که start/stop/restart برایشان معنا ندارد) از فهرست کنار گذاشته شوند —
+// جایگزینِ روش قبلی که این تشخیص را از روی وجود supervise/control می‌داد.
+func s6ServiceIsLongrun(name string) bool {
+	b, err := os.ReadFile(filepath.Join(s6SourceDir, name, "type"))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == "longrun"
+}
+
+// listS6Services فهرست همه‌ی سرویس‌های longrun *نصب‌شده* در ایمیج را برمی‌گرداند
+// (از روی s6SourceDir)، و برای هرکدام وضعیت زنده‌اش را از s6ServiceDir اضافه
+// می‌کند اگر supervise tree آن سرویس فعلاً وجود داشته باشد. سرویسی که هنوز
+// توسط s6-rc بالا نیامده (مثلاً به‌خاطر صف طولانی راه‌اندازی یا وابستگی
+// برآورده‌نشده) دیگر از فهرست حذف نمی‌شود — به‌جایش با Up=false نمایش داده
+// می‌شود، چون هدف داشتنِ «وضعیت سرویس‌های نصب‌شده» است، نه فقط آن‌هایی که این
+// لحظه زنده‌اند.
 func listS6Services() ([]S6ServiceView, error) {
+	names, err := canonicalS6ServiceNames()
+	if err != nil {
+		// اگر منبع تعاریف در دسترس نبود (مثلاً بیرون از ایمیج واقعی)، به روش
+		// قدیمی‌تر (فقط چیزی که همین الان زیر /run/service زنده است) برگرد،
+		// تا API به‌جای خطا دادن حداقل همان‌ها را نشان بدهد.
+		return listLiveS6Services()
+	}
+	var out []S6ServiceView
+	for _, name := range names {
+		if !s6ServiceIsLongrun(name) {
+			continue // oneshot ها را کنار بگذار (network-mode-init, singbox-ready, ...)
+		}
+		view := S6ServiceView{Name: name}
+		svPath := filepath.Join(s6ServiceDir, name)
+		if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err == nil {
+			if up, pid, uptime, ok := s6Status(svPath); ok {
+				view.Up = up
+				view.Pid = pid
+				view.UptimeSec = uptime
+			}
+			if _, err := os.Stat(filepath.Join(s6LogDir, name, "current")); err == nil {
+				view.HasLogger = true
+			}
+		}
+		// وگرنه: سرویس نصب شده ولی هنوز supervise tree ندارد (در حال
+		// start شدن یا crash کرده) — همچنان با Up=false نمایش داده می‌شود.
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+// listLiveS6Services رفتار قدیمی: فقط دایرکتوری‌های زیر s6ServiceDir که واقعاً
+// supervise فعال دارند را برمی‌گرداند. به‌عنوان fallback وقتی s6SourceDir در
+// دسترس نیست نگه داشته شده.
+func listLiveS6Services() ([]S6ServiceView, error) {
 	entries, err := os.ReadDir(s6ServiceDir)
 	if err != nil {
 		return nil, err

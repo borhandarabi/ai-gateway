@@ -3,11 +3,6 @@
 Single Docker image running, as separate s6-supervised processes sharing one
 network namespace:
 
-- **OmniRoute** (Node/Next.js) — AI gateway/router, port `20128` -- pulled as
-  the official prebuilt image (`diegosouzapw/omniroute:latest-web`, confirmed
-  multi-arch amd64+arm64) and used as this image's base, rather than built
-  from source (removes its Next.js/Turbopack build from this pipeline
-  entirely -- see the OOM history below)
 - **MimoApi** (Go) — Mimo/Xiaomi provider proxy, port `3000`
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
 - **kimi-api** (Go) — kimi.com proxy, port `3002`
@@ -38,7 +33,7 @@ this repo addresses it — is documented inline in the Dockerfile and each
 
 ```
 cloudflared ─┐
-             ├─▶ mihomo ─▶ mihomo-ready ─▶ omniroute
+             ├─▶ mihomo ─▶ mihomo-ready
 network-mode-init ────────────────────────▶ mimo
                                            ▶ zai-api
                                            ▶ kimi-api
@@ -99,11 +94,11 @@ CI equivalent: `.github/workflows/docker-build.yml` -- builds `linux/amd64`
 and `linux/arm64` as **separate jobs** (native runners, no QEMU sharing a
 runner with the other arch's build), then merges them into one multi-arch
 manifest. This was originally needed to avoid a "cannot allocate memory"
-failure from a combined build, but since OmniRoute is now pulled as a
-prebuilt image (see above) instead of built from source, the actual cause of
-that OOM -- its Next.js/Turbopack build -- no longer runs in this pipeline
-at all. The per-arch job split and swap-space step are kept as cheap
-insurance for the remaining Go/Node builds.
+failure caused by OmniRoute's Next.js/Turbopack build running inside this
+pipeline. OmniRoute has since been removed from this image entirely (see
+"Resolved issues" below), so that specific OOM cause no longer exists, but
+the per-arch job split and swap-space step are kept as cheap insurance for
+the remaining Go/Node builds.
 
 ## Environment variables
 
@@ -111,7 +106,6 @@ insurance for the remaining Go/Node builds.
 |----------|---------|-------------|
 | `TUNNEL_TOKEN` | (empty) | Cloudflare Tunnel token. Leave empty to disable tunnel. |
 | `TUNNEL_ONLY` | `false` | When `true` + `TUNNEL_TOKEN` set, bind services to 127.0.0.1. |
-| `OMNIROUTE_PORT` | `20128` | OmniRoute port. |
 | `MIMO_PORT` | `3003` | MimoApi port. |
 | `KIMI_PORT` | `3002` | kimi-api port. |
 | `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_AUTH_KEY`. |
@@ -142,6 +136,21 @@ insurance for the remaining Go/Node builds.
 
 ## Resolved issues
 
+- **OmniRoute removed** — the final image used to be built `FROM` OmniRoute's
+  own prebuilt Node/Next.js image, which made OmniRoute "free" to include but
+  meant a full Node process ran alongside every other service at all times.
+  On constrained hosts (e.g. 2 vCPU / 1 GB RAM) that left too little memory
+  for zai-api's Playwright-launched Chromium, which crashed as a result.
+  OmniRoute has been removed entirely and the final stage now builds
+  `FROM debian:bookworm-slim` directly -- the leanest base still officially
+  supported for Playwright's (glibc-linked) Chromium build.
+- **System Services dashboard only showed one entry** — the s6 status API
+  only listed whatever currently had a live `supervise/control` under
+  `/run/service`, so any service s6-rc hadn't finished starting yet (which,
+  under the memory pressure above, could be most of them) was silently
+  omitted instead of shown as down. Fixed by enumerating the installed
+  service list from `/etc/s6-overlay/s6-rc.d/user/contents.d` first, then
+  overlaying live status where available.
 - **s6-rc oneshot format** — `network-mode-init` and `mihomo-ready` `up` files
   were written as bash scripts with shebangs. `s6-rc-compile` treats `up` files
   as execline, silently dropping services from the compiled database. Fixed by

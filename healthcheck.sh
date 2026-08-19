@@ -17,7 +17,6 @@ check() {
   fi
 }
 
-check "omniroute"  "http://127.0.0.1:${OMNIROUTE_PORT:-20128}/api/monitoring/health"
 check "mimo"       "http://127.0.0.1:${MIMO_PORT:-3003}/"
 check "kimi"       "http://127.0.0.1:${KIMI_PORT:-3002}/"
 check "zai-api"    "http://127.0.0.1:${ZAI_PORT:-3001}/health"
