@@ -1916,17 +1916,6 @@ const htmlContent = `<!DOCTYPE html>
         tdLive.textContent = '';
       }
 
-      // Keep View Logs in the base service row. Configuration refreshes
-      // rebuild these rows, so controls injected only by the s6 renderer can
-      // disappear on the next refresh.
-      var serviceLogBtn = document.createElement('button');
-      serviceLogBtn.className = 'btn btn-primary btn-sm service-log';
-      serviceLogBtn.textContent = 'View Logs';
-      serviceLogBtn.title = 'Watch live logs for ' + name;
-      serviceLogBtn.style.marginInlineStart = '6px';
-      serviceLogBtn.onclick = function(){ startS6LogStream(name); };
-      tdLive.appendChild(serviceLogBtn);
-
       var tdAct = document.createElement('td');
       tdAct.style.whiteSpace = 'nowrap';
 
@@ -1946,6 +1935,16 @@ const htmlContent = `<!DOCTYPE html>
       };
       tdAct.appendChild(editBtn);
       tdAct.appendChild(delBtn);
+
+      // Keep Log in the Actions column. It is deliberately created as part
+      // of the base row so it survives configuration/live-selector refreshes.
+      var serviceLogBtn = document.createElement('button');
+      serviceLogBtn.className = 'btn btn-ghost btn-sm service-log';
+      serviceLogBtn.textContent = 'Log';
+      serviceLogBtn.title = 'Watch live logs for ' + name;
+      serviceLogBtn.style.marginInlineStart = '6px';
+      serviceLogBtn.onclick = function(){ startS6LogStream(name); };
+      tdAct.appendChild(serviceLogBtn);
 
       tr.appendChild(tdName); tr.appendChild(tdListen); tr.appendChild(tdProxy); tr.appendChild(tdUrl); tr.appendChild(tdLive); tr.appendChild(tdAct);
       body.appendChild(tr);
@@ -2291,8 +2290,8 @@ const htmlContent = `<!DOCTYPE html>
       box.appendChild(button);
     });
     var logButton = document.createElement('button');
-    logButton.className = 'btn btn-primary btn-sm';
-    logButton.textContent = svc.has_logger ? 'View Logs' : 'No logger';
+    logButton.className = 'btn btn-ghost btn-sm';
+    logButton.textContent = svc.has_logger ? 'Log' : 'No logger';
     logButton.disabled = !svc.has_logger;
     logButton.onclick = function(){ startS6LogStream(svc.name); };
     box.appendChild(logButton);
@@ -2336,11 +2335,13 @@ const htmlContent = `<!DOCTYPE html>
         metaUptime.className = 'hint s6-meta';
         metaUptime.textContent = 's6 uptime: ' + (svc.up ? formatUptime(svc.uptime_sec) : '-');
         existingCells[3].appendChild(metaUptime);
-        // The base row already owns a persistent View Logs button.
+        // The base row already owns a persistent Log button. Move it after
+        // the s6 actions so Log is always the final action in the row.
         var persistentLog = existing.querySelector('.service-log');
         if (persistentLog) {
           persistentLog.disabled = false;
-          persistentLog.textContent = 'View Logs';
+          persistentLog.textContent = 'Log';
+          existingCells[5].appendChild(persistentLog);
         }
         ['Start','Stop','Restart'].forEach(function(label){
           var action = label.toLowerCase();
@@ -2407,8 +2408,8 @@ const htmlContent = `<!DOCTYPE html>
       tdActions.appendChild(actionBtn('Restart', 'restart'));
 
       var logBtn = document.createElement('button');
-      logBtn.className = 'btn btn-primary btn-sm';
-      logBtn.textContent = svc.has_logger ? 'View Logs' : 'No logger';
+      logBtn.className = 'btn btn-ghost btn-sm';
+      logBtn.textContent = svc.has_logger ? 'Log' : 'No logger';
       logBtn.disabled = !svc.has_logger;
       logBtn.onclick = function(){ startS6LogStream(svc.name); };
       tdActions.appendChild(logBtn);
@@ -2424,7 +2425,7 @@ const htmlContent = `<!DOCTYPE html>
       tr.appendChild(tdPid);
       tr.appendChild(tdUptime);
       var tdLog = document.createElement('td');
-      tdLog.appendChild(logBtn);
+      tdLog.textContent = '-';
       tr.appendChild(tdLog);
       tr.appendChild(tdActions);
       body.appendChild(tr);
