@@ -2093,6 +2093,13 @@ const htmlContent = `<!DOCTYPE html>
         b.className = 'btn btn-ghost btn-sm';
         if (extraStyle) b.style.cssText += extraStyle;
         b.textContent = label;
+        // Only valid state transitions should be actionable: an up service
+        // can be stopped/restarted, while a down service can only be started.
+        if ((action === 'start' && svc.up) ||
+            ((action === 'stop' || action === 'restart') && !svc.up)) {
+          b.disabled = true;
+          b.title = svc.up ? 'Service is already running' : 'Service is already stopped';
+        }
         b.onclick = function(){ s6Control(svc.name, action); };
         return b;
       }
@@ -8892,7 +8899,7 @@ func applySelectedToGroupHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
 		return
 	}
-	
+
 	var targetGroups []string
 	for _, tg := range req.TargetGroups {
 		tg = strings.TrimSpace(tg)
@@ -8900,7 +8907,7 @@ func applySelectedToGroupHandler(w http.ResponseWriter, r *http.Request) {
 			targetGroups = append(targetGroups, tg)
 		}
 	}
-	
+
 	var endpoints []string
 	for _, ep := range req.Endpoints {
 		ep = strings.TrimSpace(ep)
@@ -8973,7 +8980,7 @@ func applySelectedToGroupHandler(w http.ResponseWriter, r *http.Request) {
 			if t, _ := m["type"].(string); t == "wireguard" {
 				tag, _ := m["tag"].(string)
 				prefix, grouped := groupPrefixForTag(state.NodeGroups, tag)
-				
+
 				shouldSkip := false
 				if grouped {
 					for _, tg := range targetGroups {
@@ -9656,7 +9663,32 @@ func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
 
 	// از انتهای فایل شروع می‌کنیم — فقط چیزی که از این لحظه به بعد نوشته
 	// می‌شود دیده می‌شود، مطابق نیاز "فقط لحظه‌ای، بدون تاریخچه".
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	// Start at the last 64 KiB so opening the viewer immediately shows
+	// existing output. Discard a partial first line when the tail starts
+	// in the middle of a record.
+	const initialTailBytes int64 = 64 * 1024
+	seekToTail := func(file *os.File) (*bufio.Reader, error) {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			return nil, statErr
+		}
+		start := int64(0)
+		if info.Size() > initialTailBytes {
+			start = info.Size() - initialTailBytes
+		}
+		if _, seekErr := file.Seek(start, io.SeekStart); seekErr != nil {
+			return nil, seekErr
+		}
+		reader := bufio.NewReader(file)
+		if start > 0 {
+			if _, readErr := reader.ReadString('\n'); readErr != nil && readErr != io.EOF {
+				return nil, readErr
+			}
+		}
+		return reader, nil
+	}
+	reader, err := seekToTail(f)
+	if err != nil {
 		http.Error(w, "Seek failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -9664,7 +9696,6 @@ func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: ready\ndata: watching %s\n\n", name)
 	flusher.Flush()
 
-	reader := bufio.NewReader(f)
 	currentInfo, _ := os.Stat(logPath)
 	ctx := r.Context()
 	ticker := time.NewTicker(300 * time.Millisecond)
@@ -9685,12 +9716,13 @@ func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
 			// attached to the archived file forever.
 			if info, statErr := os.Stat(logPath); statErr == nil && (currentInfo == nil || !os.SameFile(currentInfo, info)) {
 				if newFile, openErr := os.Open(logPath); openErr == nil {
-					_ = f.Close()
-					f = newFile
-					reader = bufio.NewReader(f)
-					currentInfo = info
-					if _, seekErr := f.Seek(0, io.SeekEnd); seekErr != nil {
-						return
+					if newReader, seekErr := seekToTail(newFile); seekErr == nil {
+						_ = f.Close()
+						f = newFile
+						reader = newReader
+						currentInfo = info
+					} else {
+						_ = newFile.Close()
 					}
 				}
 			}
@@ -11495,7 +11527,6 @@ func warpTestStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	sendEvent("done", map[string]interface{}{"tested": tested, "found": found, "stopped": stopped})
 }
-
 
 func scanBatchWarpEndpoints(batchSize int, excludedEndpoints []string, ipType string, scopeTag string, scopeGroup string) ([]WarpScanItem, int, error) {
 	endpointNodes, outboundTags, endpoints, backupsMap, verifyMode, err := buildWarpTestPlan(batchSize, excludedEndpoints, ipType, scopeTag, scopeGroup)
