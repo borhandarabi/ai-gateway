@@ -2073,9 +2073,11 @@ const htmlContent = `<!DOCTYPE html>
       tdName.textContent = svc.name;
 
       var tdStatus = document.createElement('td');
-      tdStatus.innerHTML = svc.up
-        ? '<span class="badge" style="background:var(--success); color:#fff;">up</span>'
-        : '<span class="badge" style="background:var(--danger); color:#fff;">down</span>';
+      var serviceStatus = svc.status || (svc.up ? 'up' : 'stopped');
+      var statusLabel = serviceStatus === 'unhealthy' ? 'unhealthy' : serviceStatus;
+      var statusColor = serviceStatus === 'up' ? 'var(--success)' :
+        (serviceStatus === 'unhealthy' ? 'var(--warning)' : 'var(--danger)');
+      tdStatus.innerHTML = '<span class="badge" style="background:' + statusColor + '; color:#fff;">' + statusLabel + '</span>';
 
       var tdPid = document.createElement('td');
       tdPid.textContent = svc.up ? (svc.pid || '-') : '-';
@@ -2095,10 +2097,15 @@ const htmlContent = `<!DOCTYPE html>
         b.textContent = label;
         // Only valid state transitions should be actionable: an up service
         // can be stopped/restarted, while a down service can only be started.
-        if ((action === 'start' && svc.up) ||
-            ((action === 'stop' || action === 'restart') && !svc.up)) {
+        if (serviceStatus === 'unknown' ||
+            (action === 'start' && serviceStatus !== 'stopped') ||
+            ((action === 'stop' || action === 'restart') && serviceStatus === 'stopped')) {
           b.disabled = true;
-          b.title = svc.up ? 'Service is already running' : 'Service is already stopped';
+          b.title = serviceStatus === 'unknown'
+            ? 'Service status is unavailable'
+            : serviceStatus === 'unhealthy'
+            ? 's6 still wants this service up; use Restart or Stop'
+            : (serviceStatus === 'up' ? 'Service is already running' : 'Service is already stopped');
         }
         b.onclick = function(){ s6Control(svc.name, action); };
         return b;
@@ -9397,6 +9404,7 @@ func envOrDefault(key, def string) string {
 type S6ServiceView struct {
 	Name      string `json:"name"`
 	Up        bool   `json:"up"`
+	Status    string `json:"status"`
 	Pid       int    `json:"pid,omitempty"`
 	UptimeSec int64  `json:"uptime_sec"`
 	HasLogger bool   `json:"has_logger"`
@@ -9461,11 +9469,12 @@ func listS6Services() ([]S6ServiceView, error) {
 		if !s6ServiceIsLongrun(name) {
 			continue // oneshot ها را کنار بگذار (network-mode-init, singbox-ready, ...)
 		}
-		view := S6ServiceView{Name: name}
+		view := S6ServiceView{Name: name, Status: "unknown"}
 		svPath := filepath.Join(s6ServiceDir, name)
 		if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err == nil {
-			if up, pid, uptime, ok := s6Status(svPath); ok {
+			if up, wantedUp, pid, uptime, ok := s6Status(svPath); ok {
 				view.Up = up
+				view.Status = s6DisplayStatus(up, wantedUp)
 				view.Pid = pid
 				view.UptimeSec = uptime
 			}
@@ -9498,9 +9507,10 @@ func listLiveS6Services() ([]S6ServiceView, error) {
 		if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err != nil {
 			continue // نه یک longrun سوپروایزشده (مثلاً یک oneshot گذراست)
 		}
-		view := S6ServiceView{Name: name}
-		if up, pid, uptime, ok := s6Status(svPath); ok {
+		view := S6ServiceView{Name: name, Status: "unknown"}
+		if up, wantedUp, pid, uptime, ok := s6Status(svPath); ok {
 			view.Up = up
+			view.Status = s6DisplayStatus(up, wantedUp)
 			view.Pid = pid
 			view.UptimeSec = uptime
 		}
@@ -9514,34 +9524,45 @@ func listLiveS6Services() ([]S6ServiceView, error) {
 }
 
 // s6Status از s6-svstat خروجی machine-readable می‌گیرد (-o up,pid,readyfor).
-func s6Status(svPath string) (up bool, pid int, uptimeSec int64, ok bool) {
+func s6Status(svPath string) (up bool, wantedUp bool, pid int, uptimeSec int64, ok bool) {
 	out, err := exec.Command(
 		"/command/s6-svstat",
-		"-o", "up,pid,updownfor",
+		"-o", "up,wantedup,pid,updownfor",
 		svPath,
 	).Output()
 	if err != nil {
-		return false, 0, 0, false
+		return false, false, 0, 0, false
 	}
 
 	fields := strings.Fields(string(out))
-	if len(fields) != 3 {
-		return false, 0, 0, false
+	if len(fields) != 4 {
+		return false, false, 0, 0, false
 	}
 
 	up = fields[0] == "true"
+	wantedUp = fields[1] == "true"
 
-	pid, err = strconv.Atoi(fields[1])
+	pid, err = strconv.Atoi(fields[2])
 	if err != nil {
-		return false, 0, 0, false
+		return false, false, 0, 0, false
 	}
 
-	uptimeSec, err = strconv.ParseInt(fields[2], 10, 64)
+	uptimeSec, err = strconv.ParseInt(fields[3], 10, 64)
 	if err != nil {
-		return false, 0, 0, false
+		return false, false, 0, 0, false
 	}
 
-	return up, pid, uptimeSec, true
+	return up, wantedUp, pid, uptimeSec, true
+}
+
+func s6DisplayStatus(up, wantedUp bool) string {
+	if up {
+		return "up"
+	}
+	if wantedUp {
+		return "unhealthy"
+	}
+	return "stopped"
 }
 
 // isValidS6ServiceName جلوی path traversal/command injection را از طریق نام
