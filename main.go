@@ -10083,17 +10083,28 @@ func renderServiceRunEnv(script string, env map[string]string) string {
 	block.WriteString(serviceEnvEnd + "\n")
 
 	lines := strings.SplitAfter(script, "\n")
+	insertAt := -1
+	// Place the block in the prologue. In particular, it must precede
+	// heredocs/config generation in services such as grok2api.
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// "exec 2>&1" only redirects the service logger and is not the
-		// application launch. Insert after all regular exports, immediately
-		// before the real exec, so dashboard values override defaults above.
-		isLoggerRedirect := trimmed == "exec 2>&1" || trimmed == "exec 2>&1\r"
-		if !isLoggerRedirect && (trimmed == "exec" || strings.HasPrefix(trimmed, "exec ") || strings.HasPrefix(trimmed, "exec\t")) {
-			prefix := strings.Join(lines[:i], "")
-			suffix := strings.Join(lines[i:], "")
-			return prefix + block.String() + suffix
+		if strings.HasPrefix(trimmed, "#!") || strings.HasPrefix(trimmed, "set ") || trimmed == "set -e" || trimmed == "set -u" {
+			insertAt = i + 1
+			continue
 		}
+		if trimmed == "exec 2>&1" || trimmed == "exec 2>&1\r" {
+			insertAt = i + 1
+			break
+		}
+		if insertAt >= 0 && trimmed == "" {
+			continue
+		}
+		break
+	}
+	if insertAt >= 0 {
+		prefix := strings.Join(lines[:insertAt], "")
+		suffix := strings.Join(lines[insertAt:], "")
+		return prefix + block.String() + suffix
 	}
 	if script != "" && !strings.HasSuffix(script, "\n") {
 		script += "\n"
