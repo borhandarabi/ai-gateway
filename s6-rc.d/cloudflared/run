@@ -5,6 +5,7 @@
 # reconnects periodically), mihomo/config.yaml also carries a
 # PROCESS-NAME,cloudflared,DIRECT rule so its traffic is never captured by TUN.
 set -e
+exec 2>&1
 if [ -z "${TUNNEL_TOKEN:-}" ]; then
   echo "[cloudflared] TUNNEL_TOKEN not set -- service idle (no tunnel started)"
   exec sleep infinity

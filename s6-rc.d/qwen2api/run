@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 cd /opt/qwen2api
 export PORT="${QWEN2API_PORT:-3006}"
 export HOST="${BIND_ADDR:-0.0.0.0}"

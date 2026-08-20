@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 cd /opt/mimo
 mkdir -p /data/mimo
 # NOTE (open item): MimoApi's own source wasn't inspected for a HOST/bind-address

@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 cd /opt/zai
 export PORT="${ZAI_PORT:-3001}"
 export HOST="${BIND_ADDR:-0.0.0.0}"

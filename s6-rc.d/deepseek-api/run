@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 cd /opt/deepseek
 export PORT="${DEEPSEEK_PORT:-3005}"
 export HOST="${BIND_ADDR:-0.0.0.0}"

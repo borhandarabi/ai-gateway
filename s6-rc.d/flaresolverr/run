@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export PORT="${FLARESOLVERR_PORT:-8191}"
 export LOG_LEVEL="${FLARESOLVERR_LOG_LEVEL:-info}"

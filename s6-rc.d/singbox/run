@@ -4,6 +4,7 @@
 # (pass --cap-add=NET_ADMIN --cap-add=NET_RAW --device=/dev/net/tun to `docker run`,
 # already wired into docker-compose.yml).
 set -e
+exec 2>&1
 mkdir -p /data/sing-box
 
 export HOST="${BIND_ADDR:-0.0.0.0}"

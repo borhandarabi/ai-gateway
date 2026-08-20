@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 cd /opt/kimi
 export PORT="${KIMI_PORT:-3002}"
 export HOST="${BIND_ADDR:-0.0.0.0}"

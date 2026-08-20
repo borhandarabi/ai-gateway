@@ -1,5 +1,6 @@
 #!/command/with-contenv bash
 set -e
+exec 2>&1
 mkdir -p /data/grok2api
 mkdir -p /data/grok2api/media
 export TZ="${TZ:-Asia/Shanghai}"

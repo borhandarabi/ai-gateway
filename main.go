@@ -2135,7 +2135,11 @@ const htmlContent = `<!DOCTYPE html>
     var title = document.getElementById('s6LogTitle');
     if (title) title.textContent = '— ' + name;
     if (view) view.textContent = '';
-    var es = new EventSource('/api/s6/services/' + encodeURIComponent(name) + '/logs');
+    var logURL = '/api/s6/services/' + encodeURIComponent(name) + '/logs';
+    // EventSource cannot set X-Admin-Token, so pass the same token through
+    // the query string (the server-side auth middleware explicitly supports it).
+    if (secret) logURL += '?token=' + encodeURIComponent(secret);
+    var es = new EventSource(logURL);
     activeS6LogStream = es;
     es.onmessage = function(evt){
       if (!view) return;
@@ -9661,6 +9665,7 @@ func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	reader := bufio.NewReader(f)
+	currentInfo, _ := os.Stat(logPath)
 	ctx := r.Context()
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
@@ -9675,6 +9680,20 @@ func tailS6LogHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, ": ping\n\n")
 			flusher.Flush()
 		case <-ticker.C:
+			// s6-log rotates current by renaming it and creating a new file.
+			// Reopen the path when its inode changes, otherwise the stream stays
+			// attached to the archived file forever.
+			if info, statErr := os.Stat(logPath); statErr == nil && (currentInfo == nil || !os.SameFile(currentInfo, info)) {
+				if newFile, openErr := os.Open(logPath); openErr == nil {
+					_ = f.Close()
+					f = newFile
+					reader = bufio.NewReader(f)
+					currentInfo = info
+					if _, seekErr := f.Seek(0, io.SeekEnd); seekErr != nil {
+						return
+					}
+				}
+			}
 			for {
 				line, err := reader.ReadString('\n')
 				if line != "" {
