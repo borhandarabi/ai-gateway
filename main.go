@@ -1551,6 +1551,7 @@ const htmlContent = `<!DOCTYPE html>
     if (sectionName === 'subscriptions') loadSubscriptions();
     if (sectionName === 'singbox'){ loadSingboxInfo(); loadEnvSettings(); }
   }
+  window.showProxySection = showProxySection;
   relayoutPages();
 
   window.showPage = function(name){
@@ -2256,9 +2257,48 @@ const htmlContent = `<!DOCTYPE html>
     var empty = body.querySelector('.empty-row');
     if (empty) empty.remove();
     body.querySelectorAll('[data-s6-service]').forEach(function(row){ row.remove(); });
-    var countEl = document.getElementById('countServices');
-    if (countEl) countEl.textContent = lastServices.length + list.length;
     list.forEach(function(svc){
+      // Merge s6 data into an existing application-service row with the same
+      // name instead of rendering a second row for that service.
+      var existing = Array.prototype.slice.call(body.querySelectorAll('tr[data-service]')).find(function(row){
+        return row.dataset.service === svc.name;
+      });
+      if (existing){
+        var existingCells = existing.children;
+        existing.querySelectorAll('.s6-meta,.s6-action,.s6-log').forEach(function(el){ el.remove(); });
+        var mergedStatus = svc.status || (svc.up ? 'up' : 'stopped');
+        var mergedColor = mergedStatus === 'up' ? 'var(--success)' : (mergedStatus === 'unhealthy' ? 'var(--warning)' : 'var(--danger)');
+        var metaStatus = document.createElement('div');
+        metaStatus.className = 'hint s6-meta';
+        metaStatus.innerHTML = '<span style="color:' + mergedColor + ';">s6: ' + mergedStatus + '</span>';
+        existingCells[1].appendChild(metaStatus);
+        var metaPid = document.createElement('div');
+        metaPid.className = 'hint s6-meta';
+        metaPid.textContent = 's6 PID: ' + (svc.up ? (svc.pid || '-') : '-');
+        existingCells[2].appendChild(metaPid);
+        var metaUptime = document.createElement('div');
+        metaUptime.className = 'hint s6-meta';
+        metaUptime.textContent = 's6 uptime: ' + (svc.up ? formatUptime(svc.uptime_sec) : '-');
+        existingCells[3].appendChild(metaUptime);
+        var mergedLog = document.createElement('button');
+        mergedLog.className = 'btn btn-primary btn-sm s6-log';
+        mergedLog.textContent = svc.has_logger ? 'View Logs' : 'No logger';
+        mergedLog.disabled = !svc.has_logger;
+        mergedLog.onclick = function(){ startS6LogStream(svc.name); };
+        existingCells[4].appendChild(mergedLog);
+        ['Start','Stop','Restart'].forEach(function(label){
+          var action = label.toLowerCase();
+          var button = document.createElement('button');
+          button.className = 'btn btn-ghost btn-sm s6-action';
+          button.textContent = label;
+          if ((action === 'start' && mergedStatus !== 'stopped') ||
+              ((action === 'stop' || action === 'restart') && mergedStatus === 'stopped')) button.disabled = true;
+          button.onclick = function(){ s6Control(svc.name, action); };
+          if (action === 'stop') button.style.color = 'var(--danger)';
+          existingCells[5].appendChild(button);
+        });
+        return;
+      }
       var tr = document.createElement('tr');
       tr.dataset.s6Service = svc.name;
 
@@ -2333,6 +2373,8 @@ const htmlContent = `<!DOCTYPE html>
       tr.appendChild(tdActions);
       body.appendChild(tr);
     });
+    var countEl = document.getElementById('countServices');
+    if (countEl) countEl.textContent = body.querySelectorAll('tr:not(.empty-row)').length;
   }
 
   function s6Control(name, action){
