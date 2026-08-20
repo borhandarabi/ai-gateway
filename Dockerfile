@@ -301,6 +301,7 @@ RUN mkdir -p /run/s6/container_environment \
     && printf '0.0.0.0' > /etc/s6-overlay/s6-rc.d/network-mode-init/BIND_ADDR_DEFAULT
 
 ENV OMNIROUTE_PORT=20128 \
+    OMNIROUTE_PROXY_PORT=20129 \
     MIMO_PORT=3003 \
     ZAI_PORT=3001 \
     KIMI_PORT=3002 \
