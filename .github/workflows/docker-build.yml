@@ -22,6 +22,7 @@ env:
   DEEPSEEK_REPO: https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main
   FLARESOLVERR_REPO: https://github.com/Rorqualx/flaresolverr-go.git#main
   QWEN2API_REPO: https://github.com/XxxXTeam/Qwen2API_Go.git#main
+  ZENFREEAPI_REPO: https://github.com/izaart95-jpg/ZenFreeAPI.git#main
   # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
   # from source. Pin to a specific tag instead of the floating latest-web
   # once you've settled on a version, for reproducible builds.
@@ -94,6 +95,7 @@ jobs:
             kimi_src=${{ env.KIMI_REPO }}
             deepseek_src=${{ env.DEEPSEEK_REPO }}
             qwen2api_src=${{ env.QWEN2API_REPO }}
+            zenfreeapi_src=${{ env.ZENFREEAPI_REPO }}
             flaresolverr_src=${{ env.FLARESOLVERR_REPO }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}

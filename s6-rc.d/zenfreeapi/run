@@ -1,0 +1,17 @@
+#!/command/with-contenv bash
+set -e
+exec 2>&1
+mkdir -p "${ZEN_STATE_DIR:-/data/zenfreeapi}"
+
+export ZEN_LISTEN="${ZEN_LISTEN:-${BIND_ADDR:-0.0.0.0}:${ZENFREEAPI_PORT:-3008}}"
+export ZEN_STATE_DIR="${ZEN_STATE_DIR:-/data/zenfreeapi}"
+export OPENCODE_ZEN_BASE="${OPENCODE_ZEN_BASE:-https://opencode.ai/zen/v1}"
+export OPENCODE_API_KEY="${OPENCODE_API_KEY:-public}"
+export OPENCODE_CLIENT="${OPENCODE_CLIENT:-cli}"
+export OPENCODE_USER_AGENT="${OPENCODE_USER_AGENT:-opencode/0.0.0}"
+export HTTP_PROXY="${ZENFREEAPI_HTTP_PROXY:-socks5h://127.0.0.1:${ZENFREEAPI_PROXY_PORT:-2008}}"
+export HTTPS_PROXY="${ZENFREEAPI_HTTPS_PROXY:-socks5h://127.0.0.1:${ZENFREEAPI_PROXY_PORT:-2008}}"
+export ALL_PROXY="${ZENFREEAPI_ALL_PROXY:-socks5h://127.0.0.1:${ZENFREEAPI_PROXY_PORT:-2008}}"
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1}"
+
+exec /opt/zenfreeapi/zen-free-api

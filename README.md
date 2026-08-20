@@ -1,5 +1,9 @@
 # ai-gateway
 
+ZenFreeAPI is included as a Rust OpenAI-compatible OpenCode Zen proxy on port
+`8080`, with sing-box proxy inbound `2008`. It is built from
+`https://github.com/izaart95-jpg/ZenFreeAPI.git` and supervised by s6.
+
 Single Docker image running, as separate s6-supervised processes sharing one
 network namespace:
 
@@ -112,6 +116,13 @@ insurance for the remaining Go/Node builds.
 | `TUNNEL_TOKEN` | (empty) | Cloudflare Tunnel token. Leave empty to disable tunnel. |
 | `TUNNEL_ONLY` | `false` | When `true` + `TUNNEL_TOKEN` set, bind services to 127.0.0.1. |
 | `OMNIROUTE_PORT` | `20128` | OmniRoute port. |
+| `ZENFREEAPI_PORT` | `3008` | ZenFreeAPI HTTP listen port (`ZEN_LISTEN` is derived from it). |
+| `ZENFREEAPI_PROXY_PORT` | `2008` | sing-box mixed proxy inbound used by ZenFreeAPI. |
+| `OPENCODE_ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen upstream base URL. |
+| `OPENCODE_API_KEY` | `public` | Zen API key; public permits free-tier models only. |
+| `OPENCODE_CLIENT` | `cli` | Value sent in `x-opencode-client`. |
+| `OPENCODE_USER_AGENT` | `opencode/0.0.0` | Upstream User-Agent. |
+| `ZEN_STATE_DIR` | `/data/zenfreeapi` | Persistent Zen conversation state directory. |
 | `MIMO_PORT` | `3003` | MimoApi port. |
 | `KIMI_PORT` | `3002` | kimi-api port. |
 | `KIMI_ACCESS_TOKEN` | (empty) | **Required** for kimi-api. Get from kimi.com. Falls back to `KIMI_AUTH_KEY`. |

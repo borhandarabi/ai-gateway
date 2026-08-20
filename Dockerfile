@@ -29,6 +29,7 @@
 #     --build-context grok2api_src=https://github.com/chenyme/grok2api.git#main \
 #     --build-context flaresolverr_src=https://github.com/Rorqualx/flaresolverr-go.git#main \
 #     --build-context qwen2api_src=https://github.com/XxxXTeam/Qwen2API_Go.git#main \
+#     --build-context zenfreeapi_src=https://github.com/izaart95-jpg/ZenFreeAPI.git#main \
 #     --build-context zai_src=https://github.com/borhandarabi/GLM-Free-API.git#main \
 #     -t ai-gateway:latest .
 #
@@ -108,6 +109,19 @@ RUN go mod download
 COPY --from=qwen2api_src . .
 COPY --from=qwen2api-frontend-builder /src/public/out ./public/out
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/qwen2api ./cmd/qwen2api
+
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ZenFreeAPI (Rust) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+FROM rust:1.85-alpine AS zenfreeapi-builder
+WORKDIR /src
+COPY --from=zenfreeapi_src . .
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev
+RUN cargo build --release
+RUN candidate="target/release/zen-free-api"; \
+    if [ ! -x "$candidate" ]; then \
+      candidate="$(find target/release -maxdepth 1 -type f -perm -111 ! -name '*.d' | head -n 1)"; \
+    fi; \
+    test -n "$candidate" && test -x "$candidate"; \
+    install -D -m 0755 "$candidate" /out/zen-free-api
 
 # ───────────────────────── grok2api-go frontend (Vite) ──────────────────────
 FROM node:22-alpine AS grok2api-frontend-builder
@@ -260,6 +274,8 @@ COPY --from=flaresolverr-builder /out/flaresolverr /opt/flaresolverr/flaresolver
 COPY --from=qwen2api-backend-builder /out/qwen2api /opt/qwen2api/qwen2api
 COPY --from=qwen2api-backend-builder /src/public/out /opt/qwen2api/public/out
 
+COPY --from=zenfreeapi-builder /out/zen-free-api /opt/zenfreeapi/zen-free-api
+
 COPY --from=grok2api-backend-builder --chmod=0755 /out/grok2api /opt/grok2api/grok2api
 COPY --from=grok2api-frontend-builder /src/frontend/dist /opt/grok2api/frontend/dist
 COPY --from=grok2api_src VERSION /opt/grok2api/VERSION
@@ -289,8 +305,9 @@ RUN groupadd -g 10001 grok2api \
     && groupadd -g 10003 qwen2api \
     && useradd -u 10003 -g qwen2api -M -s /usr/sbin/nologin qwen2api
 
-RUN mkdir -p /data/omniroute /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
+RUN mkdir -p /data/omniroute /data/zenfreeapi /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
     && chown -R node:node /data/omniroute \
+    && chown -R node:node /data/zenfreeapi \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && chown -R flaresolverr:flaresolverr /data/flaresolverr /opt/flaresolverr /tmp/rod /home/flaresolverr \
     && chown -R qwen2api:qwen2api /data/qwen2api /opt/qwen2api \
@@ -302,6 +319,8 @@ RUN mkdir -p /run/s6/container_environment \
 
 ENV OMNIROUTE_PORT=20128 \
     OMNIROUTE_PROXY_PORT=20129 \
+    ZENFREEAPI_PORT=3008 \
+    ZENFREEAPI_PROXY_PORT=2008 \
     MIMO_PORT=3003 \
     ZAI_PORT=3001 \
     KIMI_PORT=3002 \
@@ -320,7 +339,7 @@ ENV OMNIROUTE_PORT=20128 \
     QWEN2API_PORT=3006 \
     PROXY_PORT=80
 
-EXPOSE 80 20128 3000 3001 3002 8000 8191 9090 7890 3005 3006
+EXPOSE 80 20128 3008 3000 3001 3002 8000 8191 9090 7890 2008 3005 3006
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
