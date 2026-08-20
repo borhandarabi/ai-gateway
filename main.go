@@ -9502,9 +9502,9 @@ func listLiveS6Services() ([]S6ServiceView, error) {
 	return out, nil
 }
 
-// s6Status از s6-svstat خروجی machine-readable می‌گیرد (-o up,pid,uptime).
+// s6Status از s6-svstat خروجی machine-readable می‌گیرد (-o up,pid,readyfor).
 func s6Status(svPath string) (up bool, pid int, uptimeSec int64, ok bool) {
-	out, err := exec.Command("/command/s6-svstat", "-o", "up,pid,uptime", svPath).Output()
+	out, err := exec.Command("/command/s6-svstat", "-o", "up,pid,readyfor", svPath).Output()
 	if err != nil {
 		return false, 0, 0, false
 	}
