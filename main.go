@@ -9504,21 +9504,32 @@ func listLiveS6Services() ([]S6ServiceView, error) {
 
 // s6Status از s6-svstat خروجی machine-readable می‌گیرد (-o up,pid,readyfor).
 func s6Status(svPath string) (up bool, pid int, uptimeSec int64, ok bool) {
-	out, err := exec.Command("/command/s6-svstat", "-o", "up,pid,readyfor", svPath).Output()
+	out, err := exec.Command(
+		"/command/s6-svstat",
+		"-o", "up,pid,updownfor",
+		svPath,
+	).Output()
 	if err != nil {
 		return false, 0, 0, false
 	}
-	fields := strings.Split(strings.TrimSpace(string(out)), ",")
-	if len(fields) < 3 {
+
+	fields := strings.Fields(string(out))
+	if len(fields) != 3 {
 		return false, 0, 0, false
 	}
-	up = strings.TrimSpace(fields[0]) == "true"
-	if p, err := strconv.Atoi(strings.TrimSpace(fields[1])); err == nil {
-		pid = p
+
+	up = fields[0] == "true"
+
+	pid, err = strconv.Atoi(fields[1])
+	if err != nil {
+		return false, 0, 0, false
 	}
-	if u, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64); err == nil {
-		uptimeSec = u
+
+	uptimeSec, err = strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return false, 0, 0, false
 	}
+
 	return up, pid, uptimeSec, true
 }
 
