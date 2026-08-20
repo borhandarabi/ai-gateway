@@ -18,7 +18,7 @@ export PROXY_COLLECTOR_URL="socks5h://127.0.0.1:${ZAI_COLLECTOR_PROXY_PORT:-2007
 # NOTE: token-collector is the actual binary (not token-generator).
 # We must NOT use exec here because we need to copy the result afterwards.
 if [ ! -f /data/zai/tokens.sqlite ]; then
-    echo "[zai-api] No tokens.sqlite found, generating tokens..."
+    echo "[zai] No tokens.sqlite found, generating tokens..."
     ./zai-api --tokens 750 --batch 1 --no-tui --parallel 1 --db-path="/data/zai/tokens.sqlite"
 fi
 

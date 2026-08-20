@@ -15,8 +15,8 @@ export NO_PROXY="localhost,127.0.0.1"
 # If no valid token is set, stay idle instead of crash-looping.
 # The service will start automatically once DEEPSEEK_TOKEN is provided.
 if [ -z "${DEEPSEEK_TOKEN}" ] || [ "${DEEPSEEK_TOKEN}" = '' ]; then
-  echo "[deepseek-api] DEEPSEEK_TOKEN is not set or using placeholder -- staying idle."
-  echo "[deepseek-api] Set a valid DeepSeek token and restart the container to enable this service."
+  echo "[deepseek] DEEPSEEK_TOKEN is not set or using placeholder -- staying idle."
+  echo "[deepseek] Set a valid DeepSeek token and restart the container to enable this service."
   exec sleep infinity
 fi
 

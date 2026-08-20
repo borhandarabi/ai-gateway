@@ -1057,6 +1057,7 @@ const htmlContent = `<!DOCTYPE html>
           </div>
           <p class="sub">Detected automatically at startup (PATH, working directory, common install paths) and downloaded automatically if missing.</p>
           <div id="singboxInfo" class="row" style="margin-bottom:14px;"></div>
+          <div id="singboxServiceSlot"></div>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
               <label for="singboxVersion">Version to install (one-off)</label>
@@ -1113,6 +1114,7 @@ const htmlContent = `<!DOCTYPE html>
           </div>
           <p class="sub">Exposes the admin panel, the Clash dashboard, and every Docker web app below through a public Cloudflare hostname. Proxy services in the Services tab always stay private.</p>
           <div id="cfStatus" class="row" style="margin-bottom:14px;"></div>
+          <div id="cloudflaredServiceSlot"></div>
 
           <div class="field">
             <label>Mode</label>
@@ -1874,6 +1876,7 @@ const htmlContent = `<!DOCTYPE html>
 
   async function renderServices(services){
     var body = document.getElementById('servicesBody');
+    services = services.filter(function(svc){ return svc.name !== 'cloudflared' && svc.name !== 'singbox'; });
     document.getElementById('countServices').textContent = services.length;
     if (services.length === 0){
       body.innerHTML = '<tr class="empty-row"><td colspan="6">No services yet — add one above.</td></tr>';
@@ -2251,6 +2254,39 @@ const htmlContent = `<!DOCTYPE html>
     return s + 's';
   }
 
+  function renderSpecialS6Service(svc, slotId){
+    var slot = document.getElementById(slotId);
+    if (!slot) return;
+    slot.innerHTML = '';
+    var status = svc.status || (svc.up ? 'up' : 'stopped');
+    var color = status === 'up' ? 'var(--success)' : (status === 'unhealthy' ? 'var(--warning)' : 'var(--danger)');
+    var box = document.createElement('div');
+    box.className = 'row';
+    box.style.cssText = 'align-items:center; margin-bottom:14px; padding:12px; background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius);';
+    var info = document.createElement('div');
+    info.className = 'field';
+    info.style.flex = '1';
+    info.innerHTML = '<b style="font-family:var(--font-mono);">' + svc.name + '</b> <span class="badge" style="background:' + color + ';color:#fff;">' + status + '</span><div class="hint">PID: ' + (svc.up ? (svc.pid || '-') : '-') + ' · Uptime: ' + (svc.up ? formatUptime(svc.uptime_sec) : '-') + '</div>';
+    box.appendChild(info);
+    ['Start','Stop','Restart'].forEach(function(label){
+      var action = label.toLowerCase();
+      var button = document.createElement('button');
+      button.className = 'btn btn-ghost btn-sm';
+      button.textContent = label;
+      if ((action === 'start' && status !== 'stopped') || ((action === 'stop' || action === 'restart') && status === 'stopped')) button.disabled = true;
+      if (action === 'stop') button.style.color = 'var(--danger)';
+      button.onclick = function(){ s6Control(svc.name, action); };
+      box.appendChild(button);
+    });
+    var logButton = document.createElement('button');
+    logButton.className = 'btn btn-primary btn-sm';
+    logButton.textContent = svc.has_logger ? 'View Logs' : 'No logger';
+    logButton.disabled = !svc.has_logger;
+    logButton.onclick = function(){ startS6LogStream(svc.name); };
+    box.appendChild(logButton);
+    slot.appendChild(box);
+  }
+
   function renderS6Services(list){
     var body = document.getElementById('servicesBody');
     if (!body) return;
@@ -2258,6 +2294,14 @@ const htmlContent = `<!DOCTYPE html>
     if (empty) empty.remove();
     body.querySelectorAll('[data-s6-service]').forEach(function(row){ row.remove(); });
     list.forEach(function(svc){
+      if (svc.name === 'cloudflared'){
+        renderSpecialS6Service(svc, 'cloudflaredServiceSlot');
+        return;
+      }
+      if (svc.name === 'singbox'){
+        renderSpecialS6Service(svc, 'singboxServiceSlot');
+        return;
+      }
       // Merge s6 data into an existing application-service row with the same
       // name instead of rendering a second row for that service.
       var existing = Array.prototype.slice.call(body.querySelectorAll('tr[data-service]')).find(function(row){

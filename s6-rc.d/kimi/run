@@ -15,8 +15,8 @@ export NO_PROXY="localhost,127.0.0.1"
 # If no valid token is set, stay idle instead of crash-looping.
 # The service will start automatically once KIMI_ACCESS_TOKEN is provided.
 if [ -z "${KIMI_ACCESS_TOKEN}" ] || [ "${KIMI_ACCESS_TOKEN}" = '' ]; then
-  echo "[kimi-api] KIMI_ACCESS_TOKEN is not set or using placeholder -- staying idle."
-  echo "[kimi-api] Set a valid Kimi access token and restart the container to enable this service."
+  echo "[kimi] KIMI_ACCESS_TOKEN is not set or using placeholder -- staying idle."
+  echo "[kimi] Set a valid Kimi access token and restart the container to enable this service."
   exec sleep infinity
 fi
 
