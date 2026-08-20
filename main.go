@@ -1913,8 +1913,19 @@ const htmlContent = `<!DOCTYPE html>
         tdLive.dataset.service = name;
         tdLive.innerHTML = '<span class="hint">' + (controllerBase ? 'loading…' : 'connect to switch live') + '</span>';
       } else {
-        tdLive.textContent = '-';
+        tdLive.textContent = '';
       }
+
+      // Keep View Logs in the base service row. Configuration refreshes
+      // rebuild these rows, so controls injected only by the s6 renderer can
+      // disappear on the next refresh.
+      var serviceLogBtn = document.createElement('button');
+      serviceLogBtn.className = 'btn btn-primary btn-sm service-log';
+      serviceLogBtn.textContent = 'View Logs';
+      serviceLogBtn.title = 'Watch live logs for ' + name;
+      serviceLogBtn.style.marginInlineStart = '6px';
+      serviceLogBtn.onclick = function(){ startS6LogStream(name); };
+      tdLive.appendChild(serviceLogBtn);
 
       var tdAct = document.createElement('td');
       tdAct.style.whiteSpace = 'nowrap';
@@ -2325,12 +2336,12 @@ const htmlContent = `<!DOCTYPE html>
         metaUptime.className = 'hint s6-meta';
         metaUptime.textContent = 's6 uptime: ' + (svc.up ? formatUptime(svc.uptime_sec) : '-');
         existingCells[3].appendChild(metaUptime);
-        var mergedLog = document.createElement('button');
-        mergedLog.className = 'btn btn-primary btn-sm s6-log';
-        mergedLog.textContent = svc.has_logger ? 'View Logs' : 'No logger';
-        mergedLog.disabled = !svc.has_logger;
-        mergedLog.onclick = function(){ startS6LogStream(svc.name); };
-        existingCells[4].appendChild(mergedLog);
+        // The base row already owns a persistent View Logs button.
+        var persistentLog = existing.querySelector('.service-log');
+        if (persistentLog) {
+          persistentLog.disabled = false;
+          persistentLog.textContent = 'View Logs';
+        }
         ['Start','Stop','Restart'].forEach(function(label){
           var action = label.toLowerCase();
           var button = document.createElement('button');
@@ -3035,8 +3046,19 @@ const htmlContent = `<!DOCTYPE html>
   async function loadSelectors(){
     var cells = document.querySelectorAll('td.live-outbound');
     if (!cells.length) return;
+    function replaceLiveContent(td, text){
+      var logButton = td.querySelector('.service-log');
+      td.innerHTML = '';
+      if (text) {
+        var hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = text;
+        td.appendChild(hint);
+      }
+      if (logButton) td.appendChild(logButton);
+    }
     if (!controllerBase){
-      cells.forEach(function(td){ td.innerHTML = '<span class="hint">connect to switch live</span>'; });
+      cells.forEach(function(td){ replaceLiveContent(td, 'connect to switch live'); });
       return;
     }
     try {
@@ -3048,7 +3070,7 @@ const htmlContent = `<!DOCTYPE html>
         var proxyName = 'select-' + name;
         var proxy = data.proxies ? data.proxies[proxyName] : null;
         if (!proxy || !proxy.type || proxy.type.toLowerCase() !== 'selector'){
-          td.innerHTML = '<span class="hint">not available</span>';
+          replaceLiveContent(td, 'not available');
           return;
         }
         var select = document.createElement('select');
@@ -3079,11 +3101,13 @@ const htmlContent = `<!DOCTYPE html>
             showMessage('Failed to switch node: ' + err.message, 'danger');
           }
         };
+        var logButton = td.querySelector('.service-log');
         td.innerHTML = '';
         td.appendChild(select);
+        if (logButton) td.appendChild(logButton);
       });
     } catch (err){
-      cells.forEach(function(td){ td.innerHTML = '<span class="hint">Clash API unreachable</span>'; });
+      cells.forEach(function(td){ replaceLiveContent(td, 'Clash API unreachable'); });
     }
   }
   window.loadSelectors = loadSelectors;
