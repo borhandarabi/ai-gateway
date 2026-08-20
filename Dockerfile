@@ -110,8 +110,8 @@ COPY --from=qwen2api_src . .
 COPY --from=qwen2api-frontend-builder /src/public/out ./public/out
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/qwen2api ./cmd/qwen2api
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ZenFreeAPI (Rust) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-FROM rust:1.85-alpine AS zenfreeapi-builder
+# ─────────────────────────  ZenFreeAPI (Rust) ───────────────────────
+FROM rust:1.88-alpine AS zenfreeapi-builder
 WORKDIR /src
 COPY --from=zenfreeapi_src . .
 RUN apk add --no-cache musl-dev pkgconfig openssl-dev
