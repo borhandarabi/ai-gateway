@@ -114,7 +114,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/qwen2api ./cmd/qwe
 FROM rust:1.88-alpine AS zenfreeapi-builder
 WORKDIR /src
 COPY --from=zenfreeapi_src . .
-RUN apk add --no-cache musl-dev pkgconfig openssl-dev
+RUN apk add --no-cache musl-dev pkgconfig openssl-dev openssl-libs-static
 RUN cargo build --release
 RUN candidate="target/release/zen-free-api"; \
     if [ ! -x "$candidate" ]; then \
