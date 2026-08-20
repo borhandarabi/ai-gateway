@@ -82,8 +82,9 @@ var (
 	// قفل عملیات فایل/کانفیگ (read-write): نوشتن‌ها Lock می‌گیرند، خواندن‌ها RLock.
 	mu sync.RWMutex
 
-	serviceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
-	warpTagRe     = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
+	serviceNameRe   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+	serviceEnvKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	warpTagRe       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 )
 
 func init() {
@@ -1936,6 +1937,14 @@ const htmlContent = `<!DOCTYPE html>
       tdAct.appendChild(editBtn);
       tdAct.appendChild(delBtn);
 
+      var envBtn = document.createElement('button');
+      envBtn.className = 'btn btn-ghost btn-sm';
+      envBtn.textContent = 'Env';
+      envBtn.title = 'Manage environment variables for ' + name;
+      envBtn.style.marginInlineStart = '6px';
+      envBtn.onclick = function(){ toggleServiceEnvEditor(tr, svc); };
+      tdAct.appendChild(envBtn);
+
       // Keep Log in the Actions column. It is deliberately created as part
       // of the base row so it survives configuration/live-selector refreshes.
       var serviceLogBtn = document.createElement('button');
@@ -1951,6 +1960,79 @@ const htmlContent = `<!DOCTYPE html>
     });
     // Trigger loadSelectors again since the DOM for .live-outbound changed
     if (controllerBase) loadSelectors();
+  }
+
+  function toggleServiceEnvEditor(tr, svc){
+    var next = tr.nextElementSibling;
+    if (next && next.dataset.envEditorFor === svc.name){
+      next.remove();
+      return;
+    }
+    if (next && next.dataset.envEditorFor) next.remove();
+
+    var editorRow = document.createElement('tr');
+    editorRow.dataset.envEditorFor = svc.name;
+    var cell = document.createElement('td');
+    cell.colSpan = 6;
+    var box = document.createElement('div');
+    box.style.cssText = 'padding:12px 14px; background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius);';
+    box.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">Environment for <span class="mono">' + svc.name + '</span></div>' +
+      '<div class="hint" style="margin-bottom:10px;">Add one variable per row using key:value. Changes are applied to the s6 run script after saving.</div>';
+
+    var rows = document.createElement('div');
+    rows.style.cssText = 'display:flex;flex-direction:column;gap:7px;';
+    function addEnvRow(key, value){
+      var row = document.createElement('div');
+      row.style.cssText = 'display:grid;grid-template-columns:minmax(150px, .7fr) 18px minmax(220px, 1.5fr) auto;gap:8px;align-items:center;';
+      var keyInput = document.createElement('input');
+      keyInput.placeholder = 'KEY';
+      keyInput.value = key || '';
+      keyInput.className = 'mono';
+      var separator = document.createElement('span');
+      separator.textContent = ':';
+      separator.style.textAlign = 'center';
+      var valueInput = document.createElement('input');
+      valueInput.placeholder = 'value';
+      valueInput.value = value || '';
+      var remove = document.createElement('button');
+      remove.className = 'btn btn-danger btn-sm';
+      remove.textContent = 'Remove';
+      remove.onclick = function(){ row.remove(); };
+      row.appendChild(keyInput); row.appendChild(separator); row.appendChild(valueInput); row.appendChild(remove);
+      rows.appendChild(row);
+    }
+    Object.keys(svc.env || {}).sort().forEach(function(key){ addEnvRow(key, svc.env[key]); });
+
+    var controls = document.createElement('div');
+    controls.style.cssText = 'display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;';
+    var add = document.createElement('button');
+    add.className = 'btn btn-ghost btn-sm';
+    add.textContent = 'Add variable';
+    add.onclick = function(){ addEnvRow('', ''); };
+    var save = document.createElement('button');
+    save.className = 'btn btn-primary btn-sm';
+    save.textContent = 'Save environment';
+    save.onclick = function(){
+      var env = {};
+      var invalid = false;
+      rows.querySelectorAll('div').forEach(function(row){
+        var inputs = row.querySelectorAll('input');
+        if (!inputs.length) return;
+        var key = inputs[0].value.trim();
+        var value = inputs[1].value;
+        if (!key) return;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || Object.prototype.hasOwnProperty.call(env, key)) invalid = true;
+        env[key] = value;
+      });
+      if (invalid){ showMessage('Environment keys must be unique POSIX names (A-Z, 0-9, _).', 'danger'); return; }
+      save.disabled = true;
+      request('/api/update_service_env', { name: svc.name, env: env }, 'Environment updated').then(function(ok){
+        if (!ok) save.disabled = false;
+      });
+    };
+    controls.appendChild(add); controls.appendChild(save);
+    box.appendChild(rows); box.appendChild(controls); cell.appendChild(box); editorRow.appendChild(cell);
+    tr.parentNode.insertBefore(editorRow, tr.nextSibling);
   }
 
   // Swaps the Name/Port cells for inputs and the action buttons for Save/Cancel,
@@ -3847,9 +3929,38 @@ type DockerService struct {
 // فایل جدای subscriptionsDir/<Name>.json نگه‌داری می‌شود (رجوع کنید به
 // refreshSubscription/renderConfig) تا template.json دستی کوچک و تمیز بماند.
 type ServiceDef struct {
-	Name       string `json:"name"`
-	ListenPort int    `json:"listen_port"`
-	ProxyPort  int    `json:"proxy_port"`
+	Name       string            `json:"name"`
+	ListenPort int               `json:"listen_port"`
+	ProxyPort  int               `json:"proxy_port"`
+	Env        map[string]string `json:"env,omitempty"`
+}
+
+func normalizeServiceEnv(env map[string]string) (map[string]string, error) {
+	if len(env) > 128 {
+		return nil, fmt.Errorf("a service may have at most 128 environment variables")
+	}
+	normalized := make(map[string]string, len(env))
+	for key, value := range env {
+		key = strings.TrimSpace(key)
+		if !serviceEnvKeyRe.MatchString(key) {
+			return nil, fmt.Errorf("invalid environment key %q", key)
+		}
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return nil, fmt.Errorf("environment value for %q contains a forbidden control character", key)
+		}
+		if len(value) > 16384 {
+			return nil, fmt.Errorf("environment value for %q is too long", key)
+		}
+		if _, exists := normalized[key]; exists {
+			return nil, fmt.Errorf("duplicate environment key %q", key)
+		}
+		normalized[key] = value
+	}
+	return normalized, nil
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 type Subscription struct {
@@ -6706,6 +6817,7 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		Name:       req.NewName,
 		ListenPort: req.NewListenPort,
 		ProxyPort:  req.NewProxyPort,
+		Env:        state.Services[targetIdx].Env,
 	}
 
 	if err := writeState(state); err != nil {
@@ -6732,6 +6844,63 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	rebuildProxyRoutes()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("Service %q updated", req.NewName)})
+}
+
+// updateServiceEnvHandler stores and applies the extra environment variables
+// for the matching s6-rc.d/<service>/run script.
+func updateServiceEnvHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string            `json:"name"`
+		Env  map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if !isValidS6ServiceName(req.Name) {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid service name"})
+		return
+	}
+	env, err := normalizeServiceEnv(req.Env)
+	if err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	state := readStateOrDefault()
+	serviceIndex := -1
+	for i, svc := range state.Services {
+		if svc.Name == req.Name {
+			serviceIndex = i
+			break
+		}
+	}
+	if serviceIndex < 0 {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.Name)})
+		return
+	}
+	if err := applyServiceEnvToRun(req.Name, env); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if len(env) == 0 {
+		state.Services[serviceIndex].Env = nil
+	} else {
+		state.Services[serviceIndex].Env = env
+	}
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save service environment: " + err.Error()})
+		return
+	}
+	restarted := restartS6ServiceIfWanted(req.Name)
+	message := fmt.Sprintf("Environment for %q updated", req.Name)
+	if restarted {
+		message += "; service restarted"
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": message, "restarted": restarted})
 }
 
 // ---------------------------------------------------------------------
@@ -9850,6 +10019,124 @@ type S6ServiceView struct {
 // داشبورد دیده شوند — حتی اگر هنوز بالا نیامده‌اند یا crash کرده باشند.
 var s6SourceDir = envOrDefault("S6_SOURCE_DIR", "/etc/s6-overlay/s6-rc.d")
 
+const (
+	serviceEnvBegin = "# BEGIN AI-GATEWAY SERVICE ENV"
+	serviceEnvEnd   = "# END AI-GATEWAY SERVICE ENV"
+)
+
+func renderServiceRunEnv(script string, env map[string]string) string {
+	// Remove the block previously managed by the dashboard, while leaving all
+	// user-authored lines in the s6 run script untouched.
+	if begin := strings.Index(script, serviceEnvBegin); begin >= 0 {
+		lineStart := strings.LastIndex(script[:begin], "\n") + 1
+		end := strings.Index(script[begin:], serviceEnvEnd)
+		if end >= 0 {
+			end += begin
+			lineEnd := strings.Index(script[end:], "\n")
+			if lineEnd >= 0 {
+				lineEnd += end + 1
+			} else {
+				lineEnd = len(script)
+			}
+			script = script[:lineStart] + script[lineEnd:]
+		}
+	}
+	if len(env) == 0 {
+		return script
+	}
+
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var block strings.Builder
+	block.WriteString(serviceEnvBegin + "\n")
+	for _, key := range keys {
+		block.WriteString("export ")
+		block.WriteString(key)
+		block.WriteString("=")
+		block.WriteString(shellSingleQuote(env[key]))
+		block.WriteByte('\n')
+	}
+	block.WriteString(serviceEnvEnd + "\n")
+
+	lines := strings.SplitAfter(script, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// "exec 2>&1" only redirects the service logger and is not the
+		// application launch. Insert after all regular exports, immediately
+		// before the real exec, so dashboard values override defaults above.
+		isLoggerRedirect := trimmed == "exec 2>&1" || trimmed == "exec 2>&1\r"
+		if !isLoggerRedirect && (trimmed == "exec" || strings.HasPrefix(trimmed, "exec ") || strings.HasPrefix(trimmed, "exec\t")) {
+			prefix := strings.Join(lines[:i], "")
+			suffix := strings.Join(lines[i:], "")
+			return prefix + block.String() + suffix
+		}
+	}
+	if script != "" && !strings.HasSuffix(script, "\n") {
+		script += "\n"
+	}
+	return script + block.String()
+}
+
+func writeServiceRunScript(path string, data []byte, mode os.FileMode) error {
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		// Preserve symlinks used by s6-overlay and write through to their target.
+		return os.WriteFile(path, data, mode.Perm())
+	}
+	return atomicWriteFile(path, data, mode.Perm())
+}
+
+func applyServiceEnvToRun(name string, env map[string]string) error {
+	if !isValidS6ServiceName(name) {
+		return fmt.Errorf("invalid s6 service name %q", name)
+	}
+	sourcePath := filepath.Join(s6SourceDir, name, "run")
+	script, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return fmt.Errorf("cannot read %s: %w", sourcePath, err)
+	}
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return err
+	}
+	updated := []byte(renderServiceRunEnv(string(script), env))
+	if err := writeServiceRunScript(sourcePath, updated, info.Mode()); err != nil {
+		return fmt.Errorf("cannot update %s: %w", sourcePath, err)
+	}
+
+	// In a running container s6 may execute the compiled/live copy rather
+	// than the source tree. Update it too when available so a restart applies
+	// the new environment immediately; the source remains the persistent copy.
+	livePath := filepath.Join(s6ServiceDir, name, "run")
+	if liveInfo, statErr := os.Stat(livePath); statErr == nil {
+		if liveScript, readErr := os.ReadFile(livePath); readErr == nil {
+			liveUpdated := []byte(renderServiceRunEnv(string(liveScript), env))
+			if err := writeServiceRunScript(livePath, liveUpdated, liveInfo.Mode()); err != nil {
+				return fmt.Errorf("cannot update %s: %w", livePath, err)
+			}
+		}
+	}
+	return nil
+}
+
+func restartS6ServiceIfWanted(name string) bool {
+	svPath := filepath.Join(s6ServiceDir, name)
+	if _, err := os.Stat(filepath.Join(svPath, "supervise", "control")); err != nil {
+		return false
+	}
+	up, wantedUp, _, _, ok := s6Status(svPath)
+	if !ok || (!up && !wantedUp) {
+		return false
+	}
+	if _, err := exec.Command("/command/s6-svc", "-r", svPath).CombinedOutput(); err != nil {
+		log.Printf("service env: failed to restart %s: %v", name, err)
+		return false
+	}
+	return true
+}
+
 // canonicalS6ServiceNames نام سرویس‌های عضو bundle «user» را از
 // s6SourceDir/user/contents.d می‌خواند — همان فهرستی که در build-time واقعاً
 // در ایمیج قرار گرفته، صرف‌نظر از اینکه s6-rc فعلاً برایشان supervise tree
@@ -11373,6 +11660,7 @@ func main() {
 	http.HandleFunc("/api/rebuild", requireAuth(requireMethod(http.MethodPost, rebuildHandler)))
 	http.HandleFunc("/api/add_service", requireAuth(requireMethod(http.MethodPost, addServiceHandler)))
 	http.HandleFunc("/api/edit_service", requireAuth(requireMethod(http.MethodPost, editServiceHandler)))
+	http.HandleFunc("/api/update_service_env", requireAuth(requireMethod(http.MethodPost, updateServiceEnvHandler)))
 	http.HandleFunc("/api/delete_service", requireAuth(requireMethod(http.MethodPost, deleteServiceHandler)))
 	http.HandleFunc("/api/settings", requireAuth(requireMethod(http.MethodGet, settingsHandler)))
 	http.HandleFunc("/api/settings/admin_token", requireAuth(requireMethod(http.MethodPost, updateAdminTokenHandler)))
