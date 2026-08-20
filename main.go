@@ -377,6 +377,8 @@ const htmlContent = `<!DOCTYPE html>
     color:var(--text-dim);background:var(--surface-2);padding:1px 6px;border-radius:20px;
   }
   .navitem.active .count{color:var(--accent-strong);background:rgba(91,140,255,.16);}
+  .navitem[data-page="warp"],.navitem[data-page="outbounds"],.navitem[data-page="dashboard"],.navitem[data-page="raw"]{display:none;}
+  .navitem[data-page="s6"]{display:none;}
 
   #sidebar .sidebar-footer{margin-top:auto;padding-top:14px;border-top:1px solid var(--border-soft);}
   .status-pill{
@@ -658,6 +660,18 @@ const htmlContent = `<!DOCTYPE html>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 17l-5-5 5-5M16 7l5 5-5 5"/></svg>
         Raw Config
       </button>
+      <button class="navitem" data-page="proxy" onclick="showPage('proxy')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="11" cy="17" r="1"/></svg>
+        Proxy
+      </button>
+      <button class="navitem" data-page="cloudflare" onclick="showPage('cloudflare')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18h12a4 4 0 0 0 .5-7.97A6 6 0 0 0 7 8.5 4.5 4.5 0 0 0 6 18Z"/></svg>
+        CloudFlare
+      </button>
+      <button class="navitem" data-page="backup" onclick="showPage('backup')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
+        Backup &amp; Restore
+      </button>
       <button class="navitem" data-page="settings" onclick="showPage('settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"/></svg>
         Settings
@@ -737,10 +751,32 @@ const htmlContent = `<!DOCTYPE html>
             <p class="sub" style="margin:0;">Live outbound changes take effect immediately via the Clash API, without restarting sing-box.</p>
           </div>
           <table class="data">
-            <thead><tr><th>Service</th><th>Listen Port</th><th>Proxy Port</th><th>Public URL</th><th>Live Outbound</th><th></th></tr></thead>
+            <thead><tr><th>Service</th><th>Listen Port / Status</th><th>Proxy Port / PID</th><th>Public URL / Uptime</th><th>Live Outbound / Logs</th><th>Actions</th></tr></thead>
             <tbody id="servicesBody"><tr class="empty-row"><td colspan="6">Loading...</td></tr></tbody>
           </table>
         </div>
+        <div id="serviceLiveLogSlot"></div>
+      </section>
+
+      <!-- ============ PROXY HUB ============ -->
+      <section class="page" id="page-proxy">
+        <div class="page-head">
+          <div><h1>Proxy</h1><p>Manage WARP, outbounds, subscriptions, sing-box and the proxy dashboard from one place.</p></div>
+        </div>
+        <div class="row proxy-subnav" style="margin-bottom:18px;">
+          <button class="btn btn-primary btn-sm" data-subpage="warp" onclick="showProxySection('warp')">WARP Nodes</button>
+          <button class="btn btn-ghost btn-sm" data-subpage="outbounds" onclick="showProxySection('outbounds')">Outbounds</button>
+          <button class="btn btn-ghost btn-sm" data-subpage="dashboard" onclick="showProxySection('dashboard')">Dashboard</button>
+          <button class="btn btn-ghost btn-sm" data-subpage="raw" onclick="showProxySection('raw')">Raw Config</button>
+          <button class="btn btn-ghost btn-sm" data-subpage="subscriptions" onclick="showProxySection('subscriptions')">Subscriptions</button>
+          <button class="btn btn-ghost btn-sm" data-subpage="singbox" onclick="showProxySection('singbox')">sing-box</button>
+        </div>
+        <div id="proxySectionWarp"></div>
+        <div id="proxySectionOutbounds"></div>
+        <div id="proxySectionDashboard"></div>
+        <div id="proxySectionRaw"></div>
+        <div id="proxySectionSubscriptions"></div>
+        <div id="proxySectionSingbox"></div>
       </section>
 
       <!-- ============ WARP NODES ============ -->
@@ -979,11 +1015,21 @@ const htmlContent = `<!DOCTYPE html>
       </section>
 
       <!-- ============ SETTINGS ============ -->
+      <section class="page" id="page-cloudflare">
+        <div class="page-head"><div><h1>CloudFlare</h1><p>Configure and control the Cloudflare Tunnel and its cloudflared runtime.</p></div></div>
+        <div id="cloudflareSection"></div>
+      </section>
+
+      <section class="page" id="page-backup">
+        <div class="page-head"><div><h1>Backup &amp; Restore</h1><p>Manage backup destinations, schedules, encryption and restore operations.</p></div></div>
+        <div id="backupSection"></div>
+      </section>
+
       <section class="page" id="page-settings">
         <div class="page-head">
           <div>
             <h1>Settings</h1>
-            <p>Manage the management API's admin token and the local sing-box binary.</p>
+            <p>Manage the management API secret and advanced environment overrides.</p>
           </div>
         </div>
 
@@ -1389,7 +1435,7 @@ const htmlContent = `<!DOCTYPE html>
     document.getElementById('loginOverlay').style.display = 'none';
     document.getElementById('mainContent').classList.add('show');
     var hash = window.location.hash.substring(1);
-    var validPages = ['services', 'warp', 'outbounds', 's6', 'dashboard', 'raw', 'settings'];
+    var validPages = ['services', 'proxy', 'cloudflare', 'backup', 's6', 'settings'];
     if (validPages.indexOf(hash) !== -1) {
       showPage(hash);
     } else {
@@ -1439,6 +1485,74 @@ const htmlContent = `<!DOCTYPE html>
   // -----------------------------------------------------------------
   // Navigation
   // -----------------------------------------------------------------
+  function panelWithHeading(root, heading){
+    return Array.prototype.slice.call(root.querySelectorAll('.panel')).find(function(panel){
+      var h = panel.querySelector('h2');
+      return h && h.textContent.trim().toLowerCase() === heading.toLowerCase();
+    });
+  }
+  function relayoutPages(){
+    var moves = [
+      ['page-warp', 'proxySectionWarp'],
+      ['page-outbounds', 'proxySectionOutbounds'],
+      ['page-dashboard', 'proxySectionDashboard'],
+      ['page-raw', 'proxySectionRaw']
+    ];
+    moves.forEach(function(pair){
+      var section = document.getElementById(pair[0]);
+      var slot = document.getElementById(pair[1]);
+      if (section && slot && section.parentElement !== slot){
+        slot.appendChild(section);
+        section.classList.add('embedded-page');
+        section.style.display = 'none';
+      }
+    });
+    var settings = document.getElementById('page-settings');
+    var panelMoves = [
+      ['sing-box binary', 'proxySectionSingbox'],
+      ['Subscriptions', 'proxySectionSubscriptions'],
+      ['Cloudflare Tunnel', 'cloudflareSection'],
+      ['Backup & Restore', 'backupSection']
+    ];
+    panelMoves.forEach(function(pair){
+      var panel = panelWithHeading(settings, pair[0]);
+      var slot = document.getElementById(pair[1]);
+      if (panel && slot && panel.parentElement !== slot){
+        slot.appendChild(panel);
+        panel.classList.add('embedded-panel');
+        panel.style.display = 'none';
+      }
+    });
+    var s6 = document.getElementById('page-s6');
+    var logSlot = document.getElementById('serviceLiveLogSlot');
+    if (s6 && logSlot){
+      var panels = s6.querySelectorAll('.panel');
+      var logPanel = panels.length ? panels[panels.length - 1] : null;
+      if (logPanel && logPanel.parentElement !== logSlot){
+        logSlot.appendChild(logPanel);
+        logPanel.style.display = 'block';
+      }
+    }
+  }
+  function showProxySection(sectionName){
+    relayoutPages();
+    ['warp','outbounds','dashboard','raw','subscriptions','singbox'].forEach(function(name){
+      var slot = document.getElementById('proxySection' + name.charAt(0).toUpperCase() + name.slice(1));
+      if (!slot) return;
+      Array.prototype.forEach.call(slot.children, function(child){ child.style.display = name === sectionName ? 'block' : 'none'; });
+    });
+    document.querySelectorAll('.proxy-subnav .btn').forEach(function(btn){
+      btn.classList.toggle('btn-primary', btn.dataset.subpage === sectionName);
+      btn.classList.toggle('btn-ghost', btn.dataset.subpage !== sectionName);
+    });
+    if (sectionName === 'raw') ensureRawEditors();
+    if (sectionName === 'outbounds') loadOutbounds();
+    if (sectionName === 'dashboard') loadDashboardFrame();
+    if (sectionName === 'subscriptions') loadSubscriptions();
+    if (sectionName === 'singbox'){ loadSingboxInfo(); loadEnvSettings(); }
+  }
+  relayoutPages();
+
   window.showPage = function(name){
     document.querySelectorAll('.page').forEach(function(el){ el.classList.remove('active'); });
     document.querySelectorAll('.navitem').forEach(function(el){ el.classList.remove('active'); });
@@ -1447,11 +1561,16 @@ const htmlContent = `<!DOCTYPE html>
     var nav = document.querySelector('.navitem[data-page="' + name + '"]');
     if (nav) nav.classList.add('active');
     document.getElementById('sidebar').classList.remove('open');
+    if (name === 'proxy') showProxySection('warp');
+    if (name === 'cloudflare') document.querySelectorAll('#cloudflareSection .embedded-panel').forEach(function(el){ el.style.display = 'block'; });
+    if (name === 'backup') document.querySelectorAll('#backupSection .embedded-panel').forEach(function(el){ el.style.display = 'block'; });
     if (name === 'raw') ensureRawEditors();
     if (name === 'outbounds') loadOutbounds();
     if (name === 's6') loadS6Services();
     else stopS6LogStream();
-    if (name === 'settings'){ loadSettings(); loadSingboxInfo(); loadCloudflareSettings(); loadSubscriptions(); loadEnvSettings(); loadBackupSettings(); }
+    if (name === 'cloudflare') loadCloudflareSettings();
+    if (name === 'backup') loadBackupSettings();
+    if (name === 'settings'){ loadSettings(); loadEnvSettings(); }
     if (name === 'dashboard') loadDashboardFrame();
     if (window.location.hash !== '#' + name) {
       history.replaceState(null, null, '#' + name);
@@ -1740,7 +1859,8 @@ const htmlContent = `<!DOCTYPE html>
       }
 
       lastServices = data.services || [];
-      renderServices(lastServices);
+      await renderServices(lastServices);
+      await loadS6Services();
       await loadWarpGroups();
       await loadWarpEndpoint();
       loadSelectors();
@@ -2106,7 +2226,7 @@ const htmlContent = `<!DOCTYPE html>
       var data = await res.json();
       if (!res.ok){
         if (note){ note.style.display = 'block'; note.textContent = data.error || 'Failed to load services'; }
-        document.getElementById('s6ServicesBody').innerHTML = '';
+        document.querySelectorAll('[data-s6-service]').forEach(function(row){ row.remove(); });
         return;
       }
       if (note) note.style.display = 'none';
@@ -2131,20 +2251,16 @@ const htmlContent = `<!DOCTYPE html>
   }
 
   function renderS6Services(list){
-    var body = document.getElementById('s6ServicesBody');
+    var body = document.getElementById('servicesBody');
     if (!body) return;
-    body.innerHTML = '';
-    if (list.length === 0){
-      var tr = document.createElement('tr');
-      var td = document.createElement('td');
-      td.colSpan = 5;
-      td.innerHTML = '<div class="empty-state"><p>No supervised services found.</p></div>';
-      tr.appendChild(td);
-      body.appendChild(tr);
-      return;
-    }
+    var empty = body.querySelector('.empty-row');
+    if (empty) empty.remove();
+    body.querySelectorAll('[data-s6-service]').forEach(function(row){ row.remove(); });
+    var countEl = document.getElementById('countServices');
+    if (countEl) countEl.textContent = lastServices.length + list.length;
     list.forEach(function(svc){
       var tr = document.createElement('tr');
+      tr.dataset.s6Service = svc.name;
 
       var tdName = document.createElement('td');
       tdName.style.fontFamily = 'var(--font-mono)';
@@ -2201,10 +2317,19 @@ const htmlContent = `<!DOCTYPE html>
       logBtn.onclick = function(){ startS6LogStream(svc.name); };
       tdActions.appendChild(logBtn);
 
+      tdName.textContent = svc.name;
+      tdStatus.innerHTML = '<span class="hint">s6-overlay · ' + statusLabel + '</span>';
+      tdPid.textContent = svc.up ? (svc.pid || '-') : '-';
+      tdUptime.textContent = svc.up ? formatUptime(svc.uptime_sec) : '-';
+      tdActions.style.whiteSpace = 'nowrap';
+
       tr.appendChild(tdName);
       tr.appendChild(tdStatus);
       tr.appendChild(tdPid);
       tr.appendChild(tdUptime);
+      var tdLog = document.createElement('td');
+      tdLog.appendChild(logBtn);
+      tr.appendChild(tdLog);
       tr.appendChild(tdActions);
       body.appendChild(tr);
     });
