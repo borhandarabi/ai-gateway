@@ -58,6 +58,12 @@ var (
 	subscriptionsDir = getEnvDefault("SUBSCRIPTIONS_DIR", "subscriptions")
 )
 
+var systemMetricsState struct {
+	sync.Mutex
+	prevTotal uint64
+	prevIdle  uint64
+}
+
 const (
 	singBoxCheckTimeout = 30 * time.Second
 	singBoxStopTimeout  = 10 * time.Second
@@ -687,6 +693,19 @@ const htmlContent = `<!DOCTYPE html>
         <div class="panel" id="statsPanel">
           <div class="panel-head"><h2>Runtime status</h2></div>
           <div class="row" id="statsRow"></div>
+        </div>
+
+        <div class="panel" id="systemMetricsPanel">
+          <div class="panel-head">
+            <h2>System metrics</h2>
+            <span class="hint" id="metricsUpdatedAt">waiting for samples...</span>
+          </div>
+          <div class="row" style="margin-bottom:12px;">
+            <div class="field"><div id="metricCpuNow" style="font-size:22px;font-weight:600;">—</div><div class="hint">CPU usage</div></div>
+            <div class="field"><div id="metricMemoryNow" style="font-size:22px;font-weight:600;">—</div><div class="hint">Memory usage</div></div>
+          </div>
+          <canvas id="systemMetricsChart" height="190" style="width:100%;height:190px;background:var(--bg-alt);border:1px solid var(--border);border-radius:var(--radius);"></canvas>
+          <div class="hint" style="margin-top:8px;">Last 60 samples · CPU <span style="color:var(--accent-strong);">●</span> · Memory <span style="color:var(--warning);">●</span></div>
         </div>
 
         <div class="panel">
@@ -1378,7 +1397,7 @@ const htmlContent = `<!DOCTYPE html>
     }
     loadAllData();
     setInterval(loadSelectors, 12000);
-    setInterval(loadStatus, 8000);
+    setInterval(loadStatus, 2000);
   }
 
   window.login = function(){
@@ -1517,12 +1536,72 @@ const htmlContent = `<!DOCTYPE html>
         dot.className = 'status-dot off';
         text.textContent = 'Stopped';
       }
+      updateSystemMetrics(data);
       return data;
     } catch (err){
       document.getElementById('statusDot').className = 'status-dot off';
       document.getElementById('statusText').textContent = 'Unreachable';
     }
   }
+
+  var systemMetricHistory = { cpu: [], memory: [] };
+  function updateSystemMetrics(data){
+    var cpuEl = document.getElementById('metricCpuNow');
+    var memEl = document.getElementById('metricMemoryNow');
+    var updatedEl = document.getElementById('metricsUpdatedAt');
+    if (!data.system_metrics_available){
+      if (cpuEl) cpuEl.textContent = 'Unavailable';
+      if (memEl) memEl.textContent = 'Unavailable';
+      return;
+    }
+    var cpu = Math.max(0, Math.min(100, Number(data.cpu_percent) || 0));
+    var memory = Math.max(0, Math.min(100, Number(data.memory_percent) || 0));
+    systemMetricHistory.cpu.push(cpu);
+    systemMetricHistory.memory.push(memory);
+    if (systemMetricHistory.cpu.length > 60) systemMetricHistory.cpu.shift();
+    if (systemMetricHistory.memory.length > 60) systemMetricHistory.memory.shift();
+    if (cpuEl) cpuEl.textContent = cpu.toFixed(1) + '%';
+    if (memEl) memEl.textContent = memory.toFixed(1) + '%';
+    if (updatedEl) updatedEl.textContent = 'updated ' + new Date().toLocaleTimeString();
+    drawSystemMetricsChart();
+  }
+
+  function drawSystemMetricsChart(){
+    var canvas = document.getElementById('systemMetricsChart');
+    if (!canvas) return;
+    var width = canvas.clientWidth || 600;
+    var height = canvas.clientHeight || 190;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    var pad = { left: 30, right: 12, top: 12, bottom: 22 };
+    var w = width - pad.left - pad.right;
+    var h = height - pad.top - pad.bottom;
+    ctx.clearRect(0, 0, width, height);
+    ctx.font = '11px Inter, sans-serif';
+    ctx.fillStyle = '#8b93a8';
+    for (var i = 0; i <= 4; i++){
+      var y = pad.top + h * i / 4;
+      ctx.strokeStyle = 'rgba(139,147,168,.18)';
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(width - pad.right, y); ctx.stroke();
+      ctx.fillText((100 - i * 25) + '%', 3, y + 4);
+    }
+    function line(values, color){
+      if (!values.length) return;
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+      values.forEach(function(value, index){
+        var x = pad.left + (values.length === 1 ? 0 : w * index / (values.length - 1));
+        var y = pad.top + h * (1 - value / 100);
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+    line(systemMetricHistory.cpu, '#7ea2ff');
+    line(systemMetricHistory.memory, '#f5a623');
+  }
+  window.addEventListener('resize', drawSystemMetricsChart);
 
   // -----------------------------------------------------------------
   // Overview stats
@@ -5930,11 +6009,107 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	path, _ := findSingBox()
-	jsonResponse(w, http.StatusOK, map[string]interface{}{
+	response := map[string]interface{}{
 		"running":       running,
 		"pid":           pid,
 		"sing_box_path": path,
-	})
+	}
+	for key, value := range readSystemMetrics() {
+		response[key] = value
+	}
+	jsonResponse(w, http.StatusOK, response)
+}
+
+func readSystemMetrics() map[string]interface{} {
+	metrics := map[string]interface{}{
+		"system_metrics_available": false,
+		"cpu_percent":              0.0,
+		"memory_percent":           0.0,
+		"memory_used_bytes":        uint64(0),
+		"memory_total_bytes":       uint64(0),
+	}
+	if runtime.GOOS != "linux" {
+		return metrics
+	}
+
+	total, idle, ok := readProcCPU()
+	if !ok {
+		return metrics
+	}
+	memTotal, memAvailable, ok := readProcMemory()
+	if !ok || memTotal == 0 {
+		return metrics
+	}
+
+	systemMetricsState.Lock()
+	if systemMetricsState.prevTotal != 0 && total > systemMetricsState.prevTotal && idle >= systemMetricsState.prevIdle {
+		totalDelta := total - systemMetricsState.prevTotal
+		idleDelta := idle - systemMetricsState.prevIdle
+		metrics["cpu_percent"] = 100 * (1 - float64(idleDelta)/float64(totalDelta))
+	}
+	systemMetricsState.prevTotal = total
+	systemMetricsState.prevIdle = idle
+	systemMetricsState.Unlock()
+
+	used := memTotal - memAvailable
+	metrics["system_metrics_available"] = true
+	metrics["memory_percent"] = 100 * float64(used) / float64(memTotal)
+	metrics["memory_used_bytes"] = used
+	metrics["memory_total_bytes"] = memTotal
+	return metrics
+}
+
+func readProcCPU() (total, idle uint64, ok bool) {
+	b, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[0] != "cpu" {
+			continue
+		}
+		for i := 1; i < len(fields); i++ {
+			value, parseErr := strconv.ParseUint(fields[i], 10, 64)
+			if parseErr != nil {
+				return 0, 0, false
+			}
+			total += value
+			if i == 4 || i == 5 { // idle and iowait
+				idle += value
+			}
+		}
+		return total, idle, true
+	}
+	return 0, 0, false
+}
+
+func readProcMemory() (total, available uint64, ok bool) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, false
+	}
+	var totalKB, availableKB uint64
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		value, parseErr := strconv.ParseUint(fields[1], 10, 64)
+		if parseErr != nil {
+			continue
+		}
+		switch fields[0] {
+		case "MemTotal:":
+			totalKB = value
+		case "MemAvailable:":
+			availableKB = value
+		}
+	}
+	if totalKB == 0 || availableKB > totalKB {
+		return 0, 0, false
+	}
+	return totalKB * 1024, availableKB * 1024, true
 }
 
 func rebuildHandler(w http.ResponseWriter, r *http.Request) {
