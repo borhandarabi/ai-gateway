@@ -9,10 +9,6 @@ export TZ="${TZ:-Asia/Shanghai}"
 chown -R grok2api:grok2api /data/grok2api/
 chmod 755 /data/grok2api/
 
-if [ -f /data/grok2api/config.yaml ]; then
-  mv -f /data/grok2api/config.yaml /data/grok2api/config.yaml.bak
-fi
-
 # Generate config if missing or invalid
 if [ ! -f /data/grok2api/config.yaml ]; then
   echo "[grok2api] No config found, generating default..."
@@ -44,7 +40,7 @@ frontend:
   staticPath: "/opt/grok2api/frontend/dist"
 
 qualityGuard:
-  enabled: true
+  enabled: false
   model: "grok-4.5"
   mode: hybrid # passive | active | hybrid
   activeInterval: 30m
