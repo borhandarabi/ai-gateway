@@ -114,6 +114,7 @@ var managedEnvKeys = []string{
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR", "DEFAULT_SERVICES",
 	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PROXY_PORT", "ZENFREEAPI_PORT", "ZENFREEAPI_PROXY_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
+	"OMNIROUTE_BASE_URL", "OMNIROUTE_MANAGEMENT_API_KEY", "AI_GATEWAY_INTERNAL_BASE_URL", "MIMO_API_KEY",
 	"MIMO_PROXY_PORT", "KIMI_PROXY_PORT", "DEEPSEEK_PROXY_PORT", "ZAI_PROXY_PORT", "GROK2API_PROXY_PORT",
 }
 
@@ -128,6 +129,17 @@ var managedEnvDefaults = map[string]string{
 	"CLASH_API_PORT":           "9090",
 	"MIXED_PORT":               "7890",
 	"OMNIROUTE_PROXY_PORT":     "20129",
+	// آدرس نمونه‌ی جداگانه‌ی OmniRoute (docker-compose.yml -> omniroute) که
+	// دکمه‌ی «Add to OmniRoute» در جدول Active services به آن وصل می‌شود --
+	// نه چیزی که خودِ ai-gateway اجرا می‌کند.
+	"OMNIROUTE_BASE_URL": "http://omniroute:20128",
+	// آدرسی که خودِ این کانتینر (ai-gateway) از سمتِ کانتینر omniroute با آن
+	// در دسترس است -- برای پرکردن خودکار فیلد Base URL در فرم «Add to
+	// OmniRoute» استفاده می‌شود، به‌جای هاردکد کردن یک نام سرویس ثابت در کد
+	// (چون این بسته به توپولوژی دیپلوی فرق می‌کند: نام سرویس در
+	// docker-compose.yml همین‌جا "ai-gateway" است، ولی روی Railway باید
+	// "http://ai-gateway.railway.internal" باشد).
+	"AI_GATEWAY_INTERNAL_BASE_URL": "http://ai-gateway",
 	"ZENFREEAPI_PORT":          "3008",
 	"ZENFREEAPI_PROXY_PORT":    "2008",
 	"MIMO_PORT":                "3003",
@@ -754,8 +766,8 @@ const htmlContent = `<!DOCTYPE html>
             <p class="sub" style="margin:0;">Live outbound changes take effect immediately via the Clash API, without restarting sing-box.</p>
           </div>
           <table class="data">
-            <thead><tr><th>Service</th><th>Listen Port / Status</th><th>Proxy Port / PID</th><th>Public URL / Uptime</th><th>Live Outbound / Logs</th><th>Actions</th></tr></thead>
-            <tbody id="servicesBody"><tr class="empty-row"><td colspan="6">Loading...</td></tr></tbody>
+            <thead><tr><th>Service</th><th>Listen Port / Status</th><th>Proxy Port / PID</th><th>Public URL / Uptime</th><th>Live Outbound / Logs</th><th>Actions</th><th>OmniRoute</th></tr></thead>
+            <tbody id="servicesBody"><tr class="empty-row"><td colspan="7">Loading...</td></tr></tbody>
           </table>
         </div>
         <div id="serviceLiveLogSlot"></div>
@@ -1882,10 +1894,11 @@ const htmlContent = `<!DOCTYPE html>
     services = services.filter(function(svc){ return svc.name !== 'cloudflared' && svc.name !== 'singbox'; });
     document.getElementById('countServices').textContent = services.length;
     if (services.length === 0){
-      body.innerHTML = '<tr class="empty-row"><td colspan="6">No services yet — add one above.</td></tr>';
+      body.innerHTML = '<tr class="empty-row"><td colspan="7">No services yet — add one above.</td></tr>';
       return;
     }
     var base = await resolvePublicBaseUrl();
+    var omniStatus = await loadOmniRouteStatus();
     body.innerHTML = '';
     services.forEach(function(svc){
       var name = svc.name;
@@ -1956,7 +1969,19 @@ const htmlContent = `<!DOCTYPE html>
       serviceLogBtn.onclick = function(){ startS6LogStream(name); };
       tdAct.appendChild(serviceLogBtn);
 
-      tr.appendChild(tdName); tr.appendChild(tdListen); tr.appendChild(tdProxy); tr.appendChild(tdUrl); tr.appendChild(tdLive); tr.appendChild(tdAct);
+      var tdOmni = document.createElement('td');
+      var omniLink = (omniStatus.links || {})[name];
+      var omniBtn = document.createElement('button');
+      omniBtn.className = 'btn btn-ghost btn-sm';
+      omniBtn.textContent = omniLink ? ('OmniRoute: ' + omniLink.type) : 'Add to OmniRoute';
+      omniBtn.title = 'Manage this service as a provider in the separate OmniRoute instance';
+      omniBtn.onclick = function(){
+        var internalBase = (omniStatus.internal_base_url || 'http://ai-gateway').replace(/\/+$/, '');
+        toggleOmniRouteEditor(tr, svc, omniLink, omniStatus.configured, internalBase + ':' + listenPort + '/v1', omniStatus.suggested_keys && omniStatus.suggested_keys[name]);
+      };
+      tdOmni.appendChild(omniBtn);
+
+      tr.appendChild(tdName); tr.appendChild(tdListen); tr.appendChild(tdProxy); tr.appendChild(tdUrl); tr.appendChild(tdLive); tr.appendChild(tdAct); tr.appendChild(tdOmni);
       body.appendChild(tr);
     });
     // Trigger loadSelectors again since the DOM for .live-outbound changed
@@ -1969,12 +1994,12 @@ const htmlContent = `<!DOCTYPE html>
       next.remove();
       return;
     }
-    if (next && next.dataset.envEditorFor) next.remove();
+    if (next && (next.dataset.envEditorFor || next.dataset.omniEditorFor)) next.remove();
 
     var editorRow = document.createElement('tr');
     editorRow.dataset.envEditorFor = svc.name;
     var cell = document.createElement('td');
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     var box = document.createElement('div');
     box.style.cssText = 'padding:12px 14px; background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius);';
     box.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">Environment for <span class="mono">' + svc.name + '</span></div>' +
@@ -2033,6 +2058,154 @@ const htmlContent = `<!DOCTYPE html>
     };
     controls.appendChild(add); controls.appendChild(save);
     box.appendChild(rows); box.appendChild(controls); cell.appendChild(box); editorRow.appendChild(cell);
+    tr.parentNode.insertBefore(editorRow, tr.nextSibling);
+  }
+
+  // -----------------------------------------------------------------
+  // OmniRoute provider management (separate OmniRoute container -- see
+  // docker-compose.yml's "omniroute" service). Manual per-service
+  // add/edit/remove from this same "Active services" table, calling
+  // OmniRoute's own Provider/Provider-Node management API on the operator's
+  // behalf. Nothing here runs automatically -- every call is triggered by
+  // the operator clicking a button.
+  // -----------------------------------------------------------------
+  var omniRouteStatusCache = null;
+  async function loadOmniRouteStatus(force){
+    if (omniRouteStatusCache && !force) return omniRouteStatusCache;
+    try {
+      var res = await apiFetch('/api/omniroute/status');
+      omniRouteStatusCache = await res.json();
+    } catch (err) {
+      omniRouteStatusCache = { configured: false, links: {} };
+    }
+    return omniRouteStatusCache;
+  }
+
+  function toggleOmniRouteEditor(tr, svc, link, omniConfigured, baseUrlHint, suggestedKey){
+    var next = tr.nextElementSibling;
+    if (next && next.dataset.omniEditorFor === svc.name){
+      next.remove();
+      return;
+    }
+    if (next && (next.dataset.omniEditorFor || next.dataset.envEditorFor)) next.remove();
+
+    var editorRow = document.createElement('tr');
+    editorRow.dataset.omniEditorFor = svc.name;
+    var cell = document.createElement('td');
+    cell.colSpan = 7;
+    var box = document.createElement('div');
+    box.style.cssText = 'padding:12px 14px; background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius);';
+
+    var title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;margin-bottom:4px;';
+    title.textContent = (link ? 'Edit' : 'Add') + ' OmniRoute provider for ' + svc.name;
+    box.appendChild(title);
+
+    if (!omniConfigured){
+      var warn = document.createElement('div');
+      warn.className = 'hint';
+      warn.style.cssText = 'margin-bottom:10px;color:#c0392b;';
+      warn.textContent = 'Set OMNIROUTE_BASE_URL and OMNIROUTE_MANAGEMENT_API_KEY under Settings first (create a management-scoped API key from the OmniRoute dashboard: API Keys -> Create -> enable the "manage" scope).';
+      box.appendChild(warn);
+    }
+
+    var hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.style.cssText = 'margin-bottom:10px;';
+    hint.textContent = 'Registers this service as a custom provider in the separate OmniRoute instance. OmniRoute exposes any registered provider to its own clients through both OpenAI and Anthropic formats regardless of this choice -- pick whichever this service actually speaks natively.';
+    box.appendChild(hint);
+
+    var grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:minmax(140px,.6fr) minmax(170px,.7fr) minmax(220px,1.4fr) minmax(170px,1fr);gap:8px;align-items:end;';
+
+    function field(labelText, inputEl){
+      var wrap = document.createElement('div');
+      var label = document.createElement('label');
+      label.style.cssText = 'display:block;font-size:12px;color:var(--muted,#888);margin-bottom:3px;';
+      label.textContent = labelText;
+      wrap.appendChild(label); wrap.appendChild(inputEl);
+      return wrap;
+    }
+
+    var nameInput = document.createElement('input');
+    nameInput.value = (link && link.display_name) || svc.name;
+
+    var typeSelect = document.createElement('select');
+    [['openai-compatible', 'OpenAI-compatible'], ['anthropic-compatible', 'Anthropic-compatible']].forEach(function(pair){
+      var opt = document.createElement('option'); opt.value = pair[0]; opt.textContent = pair[1];
+      typeSelect.appendChild(opt);
+    });
+    typeSelect.value = (link && link.type) || 'openai-compatible';
+
+    var urlInput = document.createElement('input');
+    urlInput.className = 'mono';
+    urlInput.value = (link && link.base_url) || baseUrlHint;
+
+    var keyInput = document.createElement('input');
+    keyInput.type = 'password';
+    keyInput.autocomplete = 'new-password';
+    if (!link && suggestedKey){
+      keyInput.value = suggestedKey;
+      keyInput.placeholder = 'API key for this service';
+    } else {
+      keyInput.placeholder = link ? 'Leave blank to keep current key' : 'API key for this service';
+    }
+
+    grid.appendChild(field('Name in OmniRoute', nameInput));
+    grid.appendChild(field('Type', typeSelect));
+    grid.appendChild(field('Base URL', urlInput));
+    grid.appendChild(field('API key', keyInput));
+    box.appendChild(grid);
+
+    if (!link && suggestedKey){
+      var keyHint = document.createElement('div');
+      keyHint.className = 'hint';
+      keyHint.style.cssText = 'margin-top:4px;';
+      keyHint.textContent = 'Prefilled from this service\'s own configured auth key (Settings). Edit it if you want OmniRoute to use a different key.';
+      box.appendChild(keyHint);
+    } else if (!link && !suggestedKey){
+      var noKeyHint = document.createElement('div');
+      noKeyHint.className = 'hint';
+      noKeyHint.style.cssText = 'margin-top:4px;';
+      noKeyHint.textContent = 'No auth key is configured for this service yet (or it issues keys from its own admin panel, like grok2api-go) -- enter one manually.';
+      box.appendChild(noKeyHint);
+    }
+
+    var controls = document.createElement('div');
+    controls.style.cssText = 'display:flex;gap:8px;margin-top:11px;flex-wrap:wrap;';
+    var save = document.createElement('button');
+    save.className = 'btn btn-primary btn-sm';
+    save.textContent = link ? 'Save changes' : 'Add to OmniRoute';
+    save.onclick = function(){
+      save.disabled = true;
+      omniRouteStatusCache = null;
+      request('/api/omniroute/save_link', {
+        service_name: svc.name,
+        display_name: nameInput.value.trim(),
+        type: typeSelect.value,
+        base_url: urlInput.value.trim(),
+        api_key: keyInput.value
+      }, link ? 'OmniRoute provider updated' : 'Added to OmniRoute').then(function(ok){
+        if (!ok) save.disabled = false;
+      });
+    };
+    controls.appendChild(save);
+
+    if (link){
+      var removeBtn = document.createElement('button');
+      removeBtn.className = 'btn btn-danger btn-sm';
+      removeBtn.textContent = 'Remove from OmniRoute';
+      removeBtn.onclick = function(){
+        askConfirm('Remove from OmniRoute', 'This deletes the "' + svc.name + '" provider (and its stored API key) from OmniRoute.', function(){
+          omniRouteStatusCache = null;
+          request('/api/omniroute/remove_link', { service_name: svc.name }, 'Removed from OmniRoute');
+        });
+      };
+      controls.appendChild(removeBtn);
+    }
+
+    box.appendChild(controls);
+    cell.appendChild(box); editorRow.appendChild(cell);
     tr.parentNode.insertBefore(editorRow, tr.nextSibling);
   }
 
@@ -3543,7 +3716,9 @@ const htmlContent = `<!DOCTYPE html>
     ZAI_PORT: 'ZaiApi / GlmApi port',
     GROK2API_PORT: 'Grok2Api port',
     FLARESOLVERR_PORT: 'FlareSolverr port',
-    FLARESOLVERR_PROXY_PORT: 'FlareSolverr proxy port'
+    FLARESOLVERR_PROXY_PORT: 'FlareSolverr proxy port',
+    OMNIROUTE_BASE_URL: 'OmniRoute base URL (the separate omniroute container -- see docker-compose.yml)',
+    OMNIROUTE_MANAGEMENT_API_KEY: 'OmniRoute management API key (password) -- from OmniRoute dashboard: API Keys -> Create -> enable "manage" scope'
   };
   async function loadEnvSettings(){
     try {
@@ -4031,6 +4206,27 @@ type AppState struct {
 	// EnvOverrides مقادیر تنظیمات مبتنی‌بر env که از صفحه‌ی Settings تغییر داده‌شده‌اند
 	// (اولویت با این مقادیر است، سپس متغیر محیطی واقعی، سپس مقدار پیش‌فرض کد).
 	EnvOverrides map[string]string `json:"env_overrides,omitempty"`
+	// OmniRouteLinks هر سرویسی که به‌عنوان provider در نمونه‌ی جداگانه‌ی OmniRoute
+	// (docker-compose.yml/omniroute/ -- عمداً کانتینر جدا، نه بخشی از این ایمیج)
+	// ثبت شده را نگه می‌دارد. فقط شناسه‌های سمت OmniRoute اینجا ذخیره می‌شود
+	// (نه خودِ API key که در OmniRoute نگه‌داری می‌شود) تا ویرایش/حذف بعدی از
+	// همین داشبورد ممکن باشد. کلید نگاشت، نام سرویس (ServiceDef.Name) است.
+	OmniRouteLinks map[string]OmniRouteLink `json:"omniroute_links,omitempty"`
+}
+
+// OmniRouteLink یک اتصال «provider» در OmniRoute را که از داشبورد ai-gateway
+// برای یک سرویس این ایمیج ساخته شده نگه می‌دارد. NodeID/ConnectionID شناسه‌های
+// واقعی سمت OmniRoute هستند (از POST /api/provider-nodes و POST /api/providers
+// برگردانده می‌شوند) -- برای PUT/DELETE بعدی لازم‌اند، چون نوع یک provider node
+// در OmniRoute بعد از ساخت غیرقابل‌تغییر است (به عوض‌کردن type، باید حذف و از نو
+// ساخته شود؛ به omniRouteSaveLinkHandler نگاه کنید).
+type OmniRouteLink struct {
+	DisplayName  string `json:"display_name"`
+	Type         string `json:"type"` // "openai-compatible" یا "anthropic-compatible"
+	BaseURL      string `json:"base_url"`
+	NodeID       string `json:"node_id"`
+	ConnectionID string `json:"connection_id"`
+	LinkedAt     string `json:"linked_at,omitempty"`
 }
 
 func readStateOrDefault() AppState {
@@ -6621,6 +6817,333 @@ func syncServicesToTemplate(state AppState, tmpl map[string]interface{}) {
 
 	tmpl["inbounds"] = newInbounds
 	tmpl["outbounds"] = newOutbounds
+}
+
+// ══════════════════════ OmniRoute provider integration ══════════════════════
+// این بخش دکمه‌ی «Add to OmniRoute» / «Edit» / «Remove» را در جدول Active
+// services پیاده می‌کند: از داشبورد ai-gateway به Management API نمونه‌ی
+// *جداگانه*‌ی OmniRoute (docker-compose.yml -> omniroute، بیرون از این ایمیج)
+// وصل می‌شود و برای سرویس انتخاب‌شده یک "provider node" + "provider connection"
+// در OmniRoute می‌سازد/ویرایش/حذف می‌کند -- دقیقاً همان دو مرحله‌ای که از
+// داشبورد OmniRoute هم به‌صورت دستی طی می‌شود (Settings -> Custom Providers ->
+// Add، سپس یک API key برایش)، فقط پرشده از همینجا. هیچ‌چیز خودکار سراسری‌ای در
+// کار نیست: هر سرویس را خودِ اپراتور با کلیک روی همین دکمه اضافه/ویرایش/حذف
+// می‌کند.
+//
+// دو تماس API لازم است چون خودِ OmniRoute این‌طور مدل شده (بررسی‌شده روی
+// سورس diegosouzapw/OmniRoute):
+//  1. POST /api/provider-nodes  -- تعریف خودِ "نوع" ارتباط (openai-compatible
+//     یا anthropic-compatible + baseUrl) را می‌سازد و یک id برمی‌گرداند.
+//  2. POST /api/providers  -- با ارجاع به همان node id، یک "connection"
+//     (نام + API key) می‌سازد؛ این همان چیزی‌ست که در داشبورد OmniRoute به‌عنوان
+//     provider واقعی دیده می‌شود.
+// نوع یک node بعد از ساخت غیرقابل‌تغییر است (updateProviderNodeSchema سمت
+// OmniRoute اصلاً فیلد type ندارد) -- اگر اپراتور نوع را عوض کند، این کد
+// node قبلی را حذف و یکی نو می‌سازد.
+var omniRouteHTTPClient = &http.Client{Timeout: 20 * time.Second}
+
+// omniRouteRequest یک درخواست مدیریتی به OMNIROUTE_BASE_URL می‌زند، با یک
+// management-scoped API key که خودِ اپراتور از داشبورد OmniRoute می‌سازد
+// (API Keys -> Create -> scope «manage» را فعال کن) در OMNIROUTE_MANAGEMENT_API_KEY
+// (صفحه‌ی Settings همینجا) ذخیره می‌کند. کوکی/سشن مرورگر عمداً استفاده نشده،
+// چون این تماس بین دو کانتینر است، نه از مرورگر اپراتور.
+func omniRouteRequest(method, path string, body interface{}) (int, map[string]interface{}, error) {
+	base := strings.TrimRight(getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"), "/")
+	key := getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "")
+	if key == "" {
+		return 0, nil, fmt.Errorf("OMNIROUTE_MANAGEMENT_API_KEY is not set (Settings -> OmniRoute) -- create a management-scoped API key from the OmniRoute dashboard first")
+	}
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, err
+		}
+		reader = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, base+path, reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := omniRouteHTTPClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("could not reach OmniRoute at %s: %w", base, err)
+	}
+	defer resp.Body.Close()
+	var out map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out, nil
+}
+
+func omniRouteErrorMessage(resp map[string]interface{}, fallback string) string {
+	if resp == nil {
+		return fallback
+	}
+	switch e := resp["error"].(type) {
+	case string:
+		if e != "" {
+			return e
+		}
+	case map[string]interface{}:
+		if msg, ok := e["message"].(string); ok && msg != "" {
+			return msg
+		}
+	}
+	return fallback
+}
+
+// GET /api/omniroute/status -- برای پرکردن ستون OmniRoute در جدول Active
+// services: پیکربندی فعلی + نگاشت لینک‌های موجود (کلید = نام سرویس) + کلید
+// API پیشنهادی هر سرویس (اگر شناخته‌شده و واقعاً تنظیم شده باشد).
+//
+// omniRouteSuggestedKeyEnv نگاشت هر سرویس به همان متغیر env ای است که خودِ
+// run script آن سرویس به‌عنوان bearer key سمت کلاینت (یعنی چیزی که باید به
+// OmniRoute داده شود) می‌خواند -- نه توکن‌های upstream (مثل KIMI_ACCESS_TOKEN
+// یا DEEPSEEK_TOKEN که برای اتصال خودِ سرویس به کیمی/دیپ‌سیک لازم‌اند، نه برای
+// احراز هویت کلاینت‌های محلی)، و نه سکرت‌های داخلی بی‌ربط (مثل jwtSecret
+// گروک که فقط session سمت پنل ادمین را امضا می‌کند). این نگاشت مستقیماً از
+// خواندن سورس هر سرویس استخراج شده، نه حدس:
+//   - zai:      ZAI_AUTH_TOKEN  (پیش‌فرض همان placeholder "Waguri")
+//   - kimi:     KIMI_AUTH_KEY   (نه KIMI_ACCESS_TOKEN -- آن یکی upstream است)
+//   - deepseek: PROXY_API_KEY   (نه DEEPSEEK_TOKEN -- آن یکی upstream است)
+//   - qwen2api: QWEN2API_KEY
+//   - mimo:     MIMO_API_KEY   (خودِ mimo-ai-proxy در internal/middleware/
+//     auth.go از os.Getenv("API_KEY") می‌خواند و فقط وقتی غیرخالی باشد اجرا
+//     می‌شود؛ s6-rc.d/mimo/run اکنون این را از MIMO_API_KEY پاس می‌دهد --
+//     پیش‌تر اصلاً پاس داده نمی‌شد)
+//   - grok2api: عمداً چیزی اینجا نیست. GROK2API_SECRET همان jwtSecret است که
+//     grok2api-go فقط برای امضای JWT سشن پنل ادمین به کار می‌برد
+//     (backend/internal/app/application.go -> adminauth.NewService) --
+//     کاملاً از سیستمی جدا که به درخواست‌های /v1/chat/completions واقعی
+//     سرویس می‌دهد (backend/internal/transport/http/middleware/auth.go ->
+//     ClientAuth -> clientkeyapp.Service.Authenticate). آن کلید مشتری واقعی
+//     فقط از پنل ادمین grok2api (admin/admin123456 پیش‌فرض) قابل‌ساخت است،
+//     نه از یک env var ثابت -- استفاده از jwtSecret اینجا کار نمی‌کرد.
+var omniRouteSuggestedKeyEnv = map[string]struct {
+	envKey string
+	envDef string
+}{
+	"zai":      {"ZAI_AUTH_TOKEN", "Waguri"},
+	"kimi":     {"KIMI_AUTH_KEY", "Waguri"},
+	"deepseek": {"PROXY_API_KEY", ""},
+	"qwen2api": {"QWEN2API_KEY", "Waguri"},
+	"mimo":     {"MIMO_API_KEY", ""},
+}
+
+func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	links := state.OmniRouteLinks
+	if links == nil {
+		links = map[string]OmniRouteLink{}
+	}
+	suggestedKeys := map[string]string{}
+	for service, spec := range omniRouteSuggestedKeyEnv {
+		if v := getSetting(spec.envKey, spec.envDef); v != "" {
+			suggestedKeys[service] = v
+		}
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{
+		"configured":        getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
+		"base_url":          getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
+		"internal_base_url": getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
+		"links":             links,
+		"suggested_keys":    suggestedKeys,
+	})
+}
+
+// POST /api/omniroute/save_link -- افزودن یا ویرایش. تشخیص افزودن-در-برابر-ویرایش
+// از روی وجود لینک ذخیره‌شده‌ی قبلی برای همین سرویس است، نه یک فلگ جدا.
+func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServiceName string `json:"service_name"`
+		DisplayName string `json:"display_name"`
+		Type        string `json:"type"`
+		BaseURL     string `json:"base_url"`
+		APIKey      string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.ServiceName = strings.TrimSpace(req.ServiceName)
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	req.APIKey = strings.TrimSpace(req.APIKey)
+
+	if req.ServiceName == "" || req.DisplayName == "" || req.BaseURL == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "service_name, display_name and base_url are required"})
+		return
+	}
+	if req.Type != "openai-compatible" && req.Type != "anthropic-compatible" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "type must be openai-compatible or anthropic-compatible"})
+		return
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	state := readStateOrDefault()
+	if state.OmniRouteLinks == nil {
+		state.OmniRouteLinks = map[string]OmniRouteLink{}
+	}
+	existing, hadExisting := state.OmniRouteLinks[req.ServiceName]
+
+	// Same type as before -> update the existing node + connection in place.
+	if hadExisting && existing.Type == req.Type && existing.NodeID != "" {
+		nodeBody := map[string]interface{}{
+			"name":    req.DisplayName,
+			"prefix":  req.ServiceName,
+			"baseUrl": req.BaseURL,
+		}
+		if req.Type == "openai-compatible" {
+			nodeBody["apiType"] = "chat"
+		}
+		status, resp, err := omniRouteRequest(http.MethodPut, "/api/provider-nodes/"+existing.NodeID, nodeBody)
+		if err != nil {
+			jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		if status >= 300 {
+			jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute rejected the update: " + omniRouteErrorMessage(resp, fmt.Sprintf("HTTP %d", status))})
+			return
+		}
+		if req.APIKey != "" && existing.ConnectionID != "" {
+			status, resp, err = omniRouteRequest(http.MethodPut, "/api/providers/"+existing.ConnectionID, map[string]interface{}{
+				"name":   req.DisplayName,
+				"apiKey": req.APIKey,
+			})
+			if err != nil {
+				jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+				return
+			}
+			if status >= 300 {
+				jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute rejected the key update: " + omniRouteErrorMessage(resp, fmt.Sprintf("HTTP %d", status))})
+				return
+			}
+		}
+		existing.DisplayName = req.DisplayName
+		existing.BaseURL = req.BaseURL
+		existing.LinkedAt = time.Now().UTC().Format(time.RFC3339)
+		state.OmniRouteLinks[req.ServiceName] = existing
+		if err := writeState(state); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "OmniRoute provider updated", "link": state.OmniRouteLinks[req.ServiceName]})
+		return
+	}
+
+	// New link, or the type changed (node type is immutable in OmniRoute --
+	// drop the stale node/connection pair first, then create fresh below).
+	if hadExisting && existing.NodeID != "" {
+		_, _, _ = omniRouteRequest(http.MethodDelete, "/api/provider-nodes/"+existing.NodeID, nil)
+	}
+
+	if req.APIKey == "" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "api_key is required the first time a service is added (or when its type changes)"})
+		return
+	}
+
+	nodeBody := map[string]interface{}{
+		"name":    req.DisplayName,
+		"prefix":  req.ServiceName,
+		"baseUrl": req.BaseURL,
+		"type":    req.Type,
+	}
+	if req.Type == "openai-compatible" {
+		nodeBody["apiType"] = "chat"
+	}
+	status, resp, err := omniRouteRequest(http.MethodPost, "/api/provider-nodes", nodeBody)
+	if err != nil {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if status >= 300 {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute rejected the provider node: " + omniRouteErrorMessage(resp, fmt.Sprintf("HTTP %d", status))})
+		return
+	}
+	node, _ := resp["node"].(map[string]interface{})
+	nodeID, _ := node["id"].(string)
+	if nodeID == "" {
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute did not return a node id"})
+		return
+	}
+
+	status, resp, err = omniRouteRequest(http.MethodPost, "/api/providers", map[string]interface{}{
+		"provider": nodeID,
+		"apiKey":   req.APIKey,
+		"name":     req.DisplayName,
+	})
+	if err != nil {
+		_, _, _ = omniRouteRequest(http.MethodDelete, "/api/provider-nodes/"+nodeID, nil) // rollback the orphaned node
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	if status >= 300 {
+		_, _, _ = omniRouteRequest(http.MethodDelete, "/api/provider-nodes/"+nodeID, nil) // rollback
+		jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute rejected the connection: " + omniRouteErrorMessage(resp, fmt.Sprintf("HTTP %d", status))})
+		return
+	}
+	connection, _ := resp["connection"].(map[string]interface{})
+	connID, _ := connection["id"].(string)
+
+	state.OmniRouteLinks[req.ServiceName] = OmniRouteLink{
+		DisplayName:  req.DisplayName,
+		Type:         req.Type,
+		BaseURL:      req.BaseURL,
+		NodeID:       nodeID,
+		ConnectionID: connID,
+		LinkedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Added to OmniRoute", "link": state.OmniRouteLinks[req.ServiceName]})
+}
+
+// POST /api/omniroute/remove_link -- حذف کامل (هم node و هم connection، چون
+// DELETE /api/provider-nodes/{id} سمت OmniRoute هر دو را با هم پاک می‌کند).
+func omniRouteRemoveLinkHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServiceName string `json:"service_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
+		return
+	}
+	req.ServiceName = strings.TrimSpace(req.ServiceName)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	state := readStateOrDefault()
+	link, ok := state.OmniRouteLinks[req.ServiceName]
+	if !ok {
+		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": "No OmniRoute link for this service"})
+		return
+	}
+	if link.NodeID != "" {
+		status, resp, err := omniRouteRequest(http.MethodDelete, "/api/provider-nodes/"+link.NodeID, nil)
+		if err != nil {
+			jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		if status >= 300 && status != http.StatusNotFound {
+			jsonResponse(w, http.StatusBadGateway, map[string]interface{}{"error": "OmniRoute rejected the deletion: " + omniRouteErrorMessage(resp, fmt.Sprintf("HTTP %d", status))})
+			return
+		}
+	}
+	delete(state.OmniRouteLinks, req.ServiceName)
+	if err := writeState(state); err != nil {
+		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Removed from OmniRoute"})
 }
 
 func addServiceHandler(w http.ResponseWriter, r *http.Request) {
@@ -11691,6 +12214,9 @@ func main() {
 	http.HandleFunc("/api/edit_service", requireAuth(requireMethod(http.MethodPost, editServiceHandler)))
 	http.HandleFunc("/api/update_service_env", requireAuth(requireMethod(http.MethodPost, updateServiceEnvHandler)))
 	http.HandleFunc("/api/delete_service", requireAuth(requireMethod(http.MethodPost, deleteServiceHandler)))
+	http.HandleFunc("/api/omniroute/status", requireAuth(requireMethod(http.MethodGet, omniRouteStatusHandler)))
+	http.HandleFunc("/api/omniroute/save_link", requireAuth(requireMethod(http.MethodPost, omniRouteSaveLinkHandler)))
+	http.HandleFunc("/api/omniroute/remove_link", requireAuth(requireMethod(http.MethodPost, omniRouteRemoveLinkHandler)))
 	http.HandleFunc("/api/settings", requireAuth(requireMethod(http.MethodGet, settingsHandler)))
 	http.HandleFunc("/api/settings/admin_token", requireAuth(requireMethod(http.MethodPost, updateAdminTokenHandler)))
 	http.HandleFunc("/api/settings/env", requireAuth(requireMethod(http.MethodGet, envSettingsHandler)))

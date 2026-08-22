@@ -12,6 +12,11 @@ export CORS_ORIGIN="${MIMO_CORS_ORIGIN:-*}"
 export SERVICE_TOKENS="${SERVICE_TOKENS}"
 export USER_IDS="${USER_IDS}"
 export XIAOMI_CHATBOT_PHS="${XIAOMI_CHATBOT_PHS}"
+# Client-facing bearer key for this service's own /v1/chat/completions
+# (mimo-ai-proxy's own middleware/auth.go: only enforced when non-empty).
+# Not set by default -- same "open unless configured" default as most other
+# services in this image.
+export API_KEY="${MIMO_API_KEY:-}"
 
 
 export HTTP_PROXY="socks5h://127.0.0.1:${MIMO_PROXY:-2003}"

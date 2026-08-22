@@ -32,15 +32,51 @@ services:
       - "${QWEN2API_PORT:-3006}:${QWEN2API_PORT:-3006}"
       - "${CLASH_API_PORT:-9090}:${CLASH_API_PORT:-9090}"
       - "${MIXED_PORT:-7890}:${MIXED_PORT:-7890}"
-      - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"     # mihomo mixed-port (SOCKS/HTTP)
+      - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"     # FlareSolverr HTTP port
     volumes:
       - zenfreeapi_data:/data/zenfreeapi
       - mimo_data:/data/mimo
       - zai_data:/data/zai
       - grok2api_data:/data/grok2api
-      - mihomo_data:/data/mihomo
+      - singbox_data:/data/sing-box
     healthcheck:
       test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # OmniRoute runs in its OWN image/container, deliberately separate from
+  # ai-gateway -- resource limits (CPU/memory) in Docker apply per-container,
+  # and OmniRoute's dashboard + provider traffic must not compete with
+  # ai-gateway's own services (several of which launch Chromium) for the
+  # same memory budget. It is NOT built from source here; it uses the
+  # official published image directly. Six ai-gateway services (mimo, zai,
+  # kimi, deepseek, grok2api, qwen2api) are reachable from this container at
+  # http://ai-gateway:<port>/v1 on the shared compose network -- add each one
+  # manually from the OmniRoute dashboard (Providers -> Add Provider ->
+  # Custom Provider); see README.md "OmniRoute" section for exact base URLs,
+  # keys, and which of the OpenAI-compatible / Anthropic-compatible add-paths
+  # fits each service.
+  omniroute:
+    image: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.50}
+    container_name: omniroute
+    restart: unless-stopped
+    depends_on:
+      - ai-gateway
+    env_file:
+      - .env
+    environment:
+      - INITIAL_PASSWORD=${OMNIROUTE_INITIAL_PASSWORD:-}
+      - JWT_SECRET=${OMNIROUTE_JWT_SECRET:?set a fixed value in .env -- must stay stable across restarts/redeploys or sessions and API keys break}
+      - API_KEY_SECRET=${OMNIROUTE_API_KEY_SECRET:?set a fixed value in .env -- must stay stable across restarts/redeploys or sessions and API keys break}
+      - REQUIRE_API_KEY=${OMNIROUTE_REQUIRE_API_KEY:-true}
+    ports:
+      - "${OMNIROUTE_PORT:-20128}:20128"
+    volumes:
+      - omniroute_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:20128/api/monitoring/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -53,5 +89,6 @@ volumes:
   grok2api_data:
   qwen2api_data:
   singbox_data:
-  mihomo_data:
+  singbox_data:
   flaresolverr_config:
+  omniroute_data:

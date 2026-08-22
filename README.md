@@ -11,7 +11,7 @@ network namespace:
 - **zai-api / GlmApi** (Go) — Z.ai/GLM provider proxy, port `3001`
 - **kimi-api** (Go) — kimi.com proxy, port `3002`
 - **grok2api-go** (Go + Node/Vite) — Grok (xAI) provider proxy + dashboard, port `8000`
-- **mihomo** (Go) — proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`) +
+- **sing-box** (Go) — proxy kernel: TUN + SOCKS/HTTP mixed-port (`7890`) +
   Clash API (`9090`)
 - **cloudflared** (Go, prebuilt) — optional Cloudflare Tunnel, always
   installed, idle unless `TUNNEL_TOKEN` is set
@@ -25,9 +25,9 @@ multi-container approach. The cost of that choice — and how each piece of
 this repo addresses it — is documented inline in the Dockerfile and each
 `s6-rc.d/*/run` script; the short version:
 
-- All four apps share one network namespace, so mihomo's TUN mode captures
+- All four apps share one network namespace, so sing-box's TUN mode captures
   **all** outbound traffic in the container unless explicitly excluded
-  (see `mihomo/config.yaml`'s `PROCESS-NAME,cloudflared,DIRECT` rule).
+  (see the sing-box configuration's `PROCESS-NAME,cloudflared,DIRECT` rule).
 - Only one `HEALTHCHECK` is possible per image — `healthcheck.sh` polls every
   service instead of relying on each app's own healthcheck.
 - Only one PID 1 is possible — `s6-overlay` supervises all processes, with an
@@ -48,7 +48,7 @@ network-mode-init ────────────────────�
 - `cloudflared` starts first and is excluded from TUN routing (both by start
   order and by an explicit rule, since long-lived connections reconnect
   periodically and could otherwise get captured after TUN comes up).
-- `mihomo-ready` blocks until mihomo's control API responds, so the other
+- `singbox-ready` blocks until sing-box's control API responds, so the other
   services never race the TUN interface coming up.
 - `network-mode-init` computes `BIND_ADDR` (`0.0.0.0` normally, `127.0.0.1`
   when `TUNNEL_ONLY=true` + `TUNNEL_TOKEN` is set) and every app service reads
@@ -56,7 +56,7 @@ network-mode-init ────────────────────�
 
 ## s6-rc oneshot scripts (important!)
 
-The `network-mode-init` and `mihomo-ready` services are **oneshot** type in
+The `network-mode-init` and `singbox-ready` services are **oneshot** type in
 s6-rc. Their `up` files must be valid **execline** scripts (not bash with
 shebangs), because `s6-rc-compile` strips the shebang and parses the body as
 execline. The actual bash logic lives in a separate `run.sh` file, and the
@@ -65,8 +65,8 @@ execline. The actual bash logic lives in a separate `run.sh` file, and the
 ```
 s6-rc.d/network-mode-init/up       → execline: with-contenv ./run.sh
 s6-rc.d/network-mode-init/run.sh   → bash: the actual logic
-s6-rc.d/mihomo-ready/up            → execline: with-contenv ./run.sh
-s6-rc.d/mihomo-ready/run.sh        → bash: the actual logic
+s6-rc.d/singbox-ready/up            → execline: with-contenv ./run.sh
+s6-rc.d/singbox-ready/run.sh        → bash: the actual logic
 ```
 
 **Do not** put `#!/command/with-contenv bash` in oneshot `up` files —
@@ -94,6 +94,46 @@ docker compose logs -f
 #   .
 ```
 
+### Production with the prebuilt image
+
+For production, use the Compose file that pulls the multi-architecture image
+published by GitHub Actions. It does not build `ai-gateway` locally:
+
+```bash
+cp .env.example .env
+# set production secrets in .env
+docker compose -f docker-compose.production.yml up -d
+```
+
+The default image is `ghcr.io/borhandarabi/ai-gateway:latest`. Pin a release
+tag or digest when reproducible rollbacks are required:
+
+```bash
+AI_GATEWAY_IMAGE=ghcr.io/borhandarabi/ai-gateway:<tag> \
+  docker compose -f docker-compose.production.yml up -d
+```
+
+The GHCR package must be public for Railway's free/public-image flow. If it is
+private, configure GHCR registry credentials in Railway (a Pro plan is
+required for private registry images).
+
+### Railway (prebuilt image, no Railway build)
+
+Railway must create this as a **Docker Image** service, using
+`ghcr.io/borhandarabi/ai-gateway:latest`; connecting this repository as a
+GitHub service would find `Dockerfile` and build it. The two-service
+image/variable/network/volume settings to enter in a Railway Template are documented in
+[`railway.template.json`](railway.template.json). After publishing that
+template, replace `ai-gateway` in the button URL below with the template's
+actual Railway template code:
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/ai-gateway)
+
+The template contains both `ai-gateway` and `omniroute`. The gateway volume is
+mounted at `/data` (including `/data/sing-box` and all other service state
+directories), while OmniRoute's volume is mounted at `/app/data`. Set provider
+tokens and other production values in the service variables.
+
 CI equivalent: `.github/workflows/docker-build.yml` -- builds `linux/amd64`
 and `linux/arm64` as **separate jobs** (native runners, no QEMU sharing a
 runner with the other arch's build), then merges them into one multi-arch
@@ -110,7 +150,7 @@ the remaining Go/Node builds.
 |----------|---------|-------------|
 | `TUNNEL_TOKEN` | (empty) | Cloudflare Tunnel token. Leave empty to disable tunnel. |
 | `TUNNEL_ONLY` | `false` | When `true` + `TUNNEL_TOKEN` set, bind services to 127.0.0.1. |
-| `OMNIROUTE_PROXY_PORT` | `20128` | OmniRoute Proxy port. |
+| `OMNIROUTE_PROXY_PORT` | `20129` | sing-box mixed-proxy inbound ai-gateway reserves for OmniRoute's own outbound traffic (optional; unrelated to OmniRoute's own listen port -- see "OmniRoute" section below). |
 | `ZENFREEAPI_PORT` | `3008` | ZenFreeAPI HTTP listen port (`ZEN_LISTEN` is derived from it). |
 | `ZENFREEAPI_PROXY_PORT` | `2008` | sing-box mixed proxy inbound used by ZenFreeAPI. |
 | `OPENCODE_ZEN_BASE` | `https://opencode.ai/zen/v1` | Zen upstream base URL. |
@@ -127,20 +167,146 @@ the remaining Go/Node builds.
 | `ZAI_AGENT_MODE` | `true` | Enable agent mode for zai-api. |
 | `GROK2API_PORT` | `3004` | Grok (xAI) proxy and web dashboard. |
 | `PROXY_PORT` | `80` | General reverse proxy (serves `/mimo/`, `/zai/`, etc., and the UI on `/`). |
-| `CLASH_API_PORT` | `9090` | mihomo Clash API port. |
-| `MIXED_PORT` | `7890` | mihomo SOCKS/HTTP mixed port. |
+| `CLASH_API_PORT` | `9090` | sing-box control API port. |
+| `MIXED_PORT` | `7890` | sing-box SOCKS/HTTP mixed port. |
 | `FLARESOLVERR_PORT` | `8191`   | FlareSolverr sidecar port (host-mapped).                                   |
 | `FLARESOLVERR_PROXY_PORT` | `8190`   | FlareSolverr sidecar port (host-mapped).                                   |
 | `FLARESOLVERR_CAPTCHA_SOLVER` | `none` | FlareSolverr captcha-solver adapter name (see upstream docs).       |
 | `QWEN2API_PORT` | `3006` | Qwen2API sidecar port (host-mapped). |
 
-## Open items (explicitly unresolved — do not treat as done)
+## OmniRoute (separate service)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) runs as its **own**
+image/container -- see `docker-compose.yml`'s `omniroute` service and
+`omniroute/Dockerfile` / `omniroute/railway.json`. It is deliberately kept
+out of the `ai-gateway` image: Docker/Railway resource limits apply
+per-container, and OmniRoute must not compete with `ai-gateway`'s own
+services (several of which launch Chromium) for the same CPU/memory.
+
+```bash
+docker compose up -d ai-gateway omniroute
+```
+
+For Railway, see `omniroute/README.md` (two options: the maintainer's own
+one-click template, or deploying this repo's `omniroute/` directory as its
+own Railway service).
+
+### Adding the six ai-gateway services as providers
+
+This is a **manual, per-service step from ai-gateway's own dashboard** (not
+automatic, and not something you have to do from OmniRoute's dashboard
+directly): open ai-gateway's **Active services** table, click **"Add to
+OmniRoute"** next to a service, review the prefilled form, and save.
+Editing and removing later reuse the same button on that row.
+
+#### What actually happens when you click Save
+
+OmniRoute models a custom provider as **two separate objects**, and the
+dashboard button performs both calls in sequence against OmniRoute's own
+management API (verified against `diegosouzapw/OmniRoute`'s source, not
+guessed):
+
+1. `POST /api/provider-nodes` -- creates the connection *type* itself:
+   name, a routing prefix, the Base URL, and `type` (`openai-compatible` or
+   `anthropic-compatible`). Returns a node id.
+2. `POST /api/providers` -- creates the actual *connection* against that
+   node id: display name + API key. This is what shows up as "the
+   provider" in OmniRoute's own dashboard.
+
+ai-gateway stores the two ids it gets back (not the API key itself) in its
+own state file, keyed by service name, so a later **Edit** knows which
+node/connection to `PUT`, and **Remove** knows which node to
+`DELETE /api/provider-nodes/{id}` (which cascades and deletes its
+connection too).
+
+A node's `type` is **immutable** on OmniRoute's side once created -- there
+is no field for it in OmniRoute's own update schema. So if you edit a
+service and change its type, the dashboard doesn't try to `PUT` the
+existing node; it deletes the old node/connection pair and creates a fresh
+one instead. That means a new API key is issued downstream -- any client
+that had hardcoded the old key needs updating.
+
+Authentication for these calls is a **management-scoped API key**
+(`Authorization: Bearer ...`), not a session cookie, since the call is
+container-to-container and not from your browser. Create one from
+OmniRoute's own dashboard: **API Keys -> Create -> enable the "manage"
+scope**.
+
+#### One-time setup (Settings, in ai-gateway's own dashboard)
+
+| Variable | What it's for |
+|---|---|
+| `OMNIROUTE_BASE_URL` | Where ai-gateway sends the two calls above. Defaults to `http://omniroute:20128`, matching the compose service name. |
+| `OMNIROUTE_MANAGEMENT_API_KEY` | The management-scoped key described above. Required -- the button fails with a clear error until this is set. |
+| `AI_GATEWAY_INTERNAL_BASE_URL` | Where **OmniRoute** should reach **this** container to call a service back. Used only to prefill the form's Base URL field (`<this>:<service port>/v1`) -- editable per-service before saving, never hardcoded in code. Defaults to `http://ai-gateway`, matching the compose service name in `docker-compose.yml`; change it if your deploy topology differs (see Railway note below). |
+
+These three all live in the exact same Settings mechanism as every other
+env var in this project (`managedEnvKeys`/`EnvOverrides`) -- nothing
+provider-specific about how they're stored.
+
+#### Where the API key value comes from
+
+The form's API key field is **prefilled automatically for four of the six
+services**, read live from that service's own already-configured auth
+setting (the same value visible on the Settings page) -- pulled from the
+exact env var each service's own s6 run script reads as its **client-facing**
+key, not whatever upstream credential it also happens to need:
+
+| Service | Prefilled from | Notes |
+|---|---|---|
+| zai-api / GlmApi | `ZAI_AUTH_TOKEN` | |
+| kimi-api | `KIMI_AUTH_KEY` | **Not** `KIMI_ACCESS_TOKEN` -- that one is kimi.com's own upstream session token the service needs to even start, unrelated to what a client presents to kimi-api's own `/v1/chat/completions`. |
+| DeepSeekApi | `PROXY_API_KEY` | **Not** `DEEPSEEK_TOKEN` -- same distinction as kimi above (upstream vs. client-facing). `PROXY_API_KEY` is empty by default, meaning no auth is required locally unless you set one. |
+| Qwen2API | `QWEN2API_KEY` | |
+| MimoApi | `MIMO_API_KEY` | mimo-ai-proxy's own `internal/middleware/auth.go` reads `API_KEY` from the environment and only enforces it when non-empty. `s6-rc.d/mimo/run` now passes this through -- it didn't before, so this service was always open regardless of upstream support until this was wired up. |
+| grok2api-go | *(nothing)* | **Not** `GROK2API_SECRET` (`jwtSecret` in its config) -- that key only signs admin-dashboard session JWTs (`adminauth.NewService` in its `application.go`), a completely separate system from the client key that actually guards `/v1/chat/completions` (`ClientAuth` -> `clientkeyapp.Service.Authenticate` in its `middleware/auth.go`). That client key can only be minted from grok2api's own admin panel (`admin`/`admin123456` default login) today, not from a static env var -- generate one there and paste it in manually. |
+
+If a value is prefilled, you can still overwrite it before saving -- it's a
+suggestion, not a lock. If nothing is prefilled, type the key in by hand.
+
+#### Which type to add each service as
+
+The form also asks for a **type** -- OpenAI-compatible or
+Anthropic-compatible (plus a stricter "Claude Code compatible" variant
+meant for reverse proxies that mimic the actual Claude Code client, not
+relevant here). This only controls which wire format OmniRoute uses when
+*calling* the service's Base URL -- it does **not** limit how OmniRoute
+exposes that provider to its own clients afterward: any registered
+provider, regardless of which type it was added as, is served back out
+through both `/v1/chat/completions` (OpenAI) and `/v1/messages`
+(Anthropic), since OmniRoute translates bidirectionally at the gateway
+level. So the only thing that matters when picking a type is which format
+the service you're adding actually speaks on its own listen port:
+
+| Service | Native OpenAI `/v1/chat/completions` | Native Anthropic `/v1/messages` | Add as |
+|---|---|---|---|
+| MimoApi | ✅ | ❌ | OpenAI-compatible |
+| zai-api / GlmApi | ✅ | ✅ (native, added upstream) | OpenAI-compatible |
+| kimi-api | ✅ | ❌ | OpenAI-compatible |
+| DeepSeekApi | ✅ | ❌ | OpenAI-compatible |
+| grok2api-go | ✅ | ✅ (native) | OpenAI-compatible |
+| Qwen2API | ✅ | ✅ (native) | OpenAI-compatible |
+
+zai-api, grok2api-go, and Qwen2API do serve a native `/v1/messages` endpoint
+of their own (verified in their upstream source, not assumed), so those
+three *can* be added via the Anthropic-compatible path instead if you
+specifically want to exercise their native implementation -- functionally
+it makes no difference to OmniRoute's own clients either way, so
+**OpenAI-compatible is the recommended, more-tested path for all six**,
+kept uniform on purpose (and it's what the form defaults to).
+
+On Railway, set `AI_GATEWAY_INTERNAL_BASE_URL` to
+`http://ai-gateway.railway.internal` if `ai-gateway` is deployed as a
+separate Railway service in the same project -- the form's Base URL prefill
+picks that up automatically instead of the docker-compose default.
+
+
 
 1. **zai-api repo URL** — not pushed yet. `ZAI_REPO` is blank/placeholder
    everywhere (`.env.example`, `docker-compose.yml`, the workflow's
    `workflow_dispatch` input / `ZAI_REPO_URL` secret, `build.sh`). Until it
    exists, point `ZAI_REPO` at a local checkout directory instead.
-3. **mihomo control API secret** — `mihomo/config.yaml`'s `secret:` field is
+3. **sing-box control API secret** — the sing-box configuration's `secret:` field is
    empty; set a real one before exposing port `9090` anywhere non-trusted.
 4. **kimi-api requires valid token** — kimi-api will fail to start if
    `KIMI_ACCESS_TOKEN` is not set to a valid kimi.com token. The placeholder
@@ -163,7 +329,7 @@ the remaining Go/Node builds.
   omitted instead of shown as down. Fixed by enumerating the installed
   service list from `/etc/s6-overlay/s6-rc.d/user/contents.d` first, then
   overlaying live status where available.
-- **s6-rc oneshot format** — `network-mode-init` and `mihomo-ready` `up` files
+- **s6-rc oneshot format** — `network-mode-init` and `singbox-ready` `up` files
   were written as bash scripts with shebangs. `s6-rc-compile` treats `up` files
   as execline, silently dropping services from the compiled database. Fixed by
   converting to execline wrappers calling separate `run.sh` bash scripts.

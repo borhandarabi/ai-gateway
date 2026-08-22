@@ -1,0 +1,65 @@
+services:
+  ai-gateway:
+    # Published by .github/workflows/docker-build.yml. Override this with a
+    # pinned tag or digest for a fully reproducible deployment.
+    image: ${AI_GATEWAY_IMAGE:-ghcr.io/borhandarabi/ai-gateway:latest}
+    container_name: ai-gateway
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    ports:
+      - "${PROXY_PORT:-80}:${PROXY_PORT:-80}"
+      - "${ZENFREEAPI_PORT:-3008}:${ZENFREEAPI_PORT:-3008}"
+      - "${MIMO_PORT:-3003}:${MIMO_PORT:-3003}"
+      - "${ZAI_PORT:-3002}:${ZAI_PORT:-3002}"
+      - "${DEEPSEEK_PORT:-3005}:${DEEPSEEK_PORT:-3005}"
+      - "${GROK2API_PORT:-3004}:${GROK2API_PORT:-3004}"
+      - "${QWEN2API_PORT:-3006}:${QWEN2API_PORT:-3006}"
+      - "${CLASH_API_PORT:-9090}:${CLASH_API_PORT:-9090}"
+      - "${MIXED_PORT:-7890}:${MIXED_PORT:-7890}"
+      - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"
+    # One volume preserves the gateway manager state as well as every
+    # service-specific directory created by s6-rc.d/*/run:
+    # /data/zenfreeapi, /data/mimo, /data/zai, /data/grok2api,
+    # /data/sing-box, /data/flaresolverr and /data/qwen2api.
+    volumes:
+      - ai_gateway_data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  omniroute:
+    image: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute:3.8.50}
+    container_name: omniroute
+    restart: unless-stopped
+    depends_on:
+      - ai-gateway
+    env_file:
+      - .env
+    environment:
+      - INITIAL_PASSWORD=${OMNIROUTE_INITIAL_PASSWORD:-}
+      - JWT_SECRET=${OMNIROUTE_JWT_SECRET:?set a fixed value in .env}
+      - API_KEY_SECRET=${OMNIROUTE_API_KEY_SECRET:?set a fixed value in .env}
+      - REQUIRE_API_KEY=${OMNIROUTE_REQUIRE_API_KEY:-true}
+    ports:
+      - "${OMNIROUTE_PORT:-20128}:20128"
+    volumes:
+      - omniroute_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:20128/api/monitoring/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ai_gateway_data:
+  omniroute_data:
