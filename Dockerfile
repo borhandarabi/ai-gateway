@@ -325,7 +325,6 @@ RUN groupadd -g 10001 grok2api \
     && useradd -u 10003 -g qwen2api -M -s /usr/sbin/nologin qwen2api
 
 RUN mkdir -p /data/zenfreeapi /data/mimo /data/zai /data/grok2api /data/sing-box /data/flaresolverr /tmp/rod /home/flaresolverr/.cache /data/qwen2api /tmp/.X11-unix \
-    && chown -R node:node /data/zenfreeapi \
     && chown -R grok2api:grok2api /data/grok2api /opt/grok2api \
     && chown -R flaresolverr:flaresolverr /data/flaresolverr /opt/flaresolverr /tmp/rod /home/flaresolverr \
     && chown -R qwen2api:qwen2api /data/qwen2api /opt/qwen2api \
