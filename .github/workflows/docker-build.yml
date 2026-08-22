@@ -23,10 +23,6 @@ env:
   FLARESOLVERR_REPO: https://github.com/Rorqualx/flaresolverr-go.git#main
   QWEN2API_REPO: https://github.com/XxxXTeam/Qwen2API_Go.git#main
   ZENFREEAPI_REPO: https://github.com/izaart95-jpg/ZenFreeAPI.git#main
-  # OmniRoute is pulled as a prebuilt base image (see Dockerfile), not built
-  # from source. Pin to a specific tag instead of the floating latest-web
-  # once you've settled on a version, for reproducible builds.
-  OMNIROUTE_IMAGE: diegosouzapw/omniroute:3.8.49-web
 
 jobs:
   build:
@@ -86,8 +82,6 @@ jobs:
           push: true
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            OMNIROUTE_IMAGE=${{ env.OMNIROUTE_IMAGE }}
           build-contexts: |
             mimo_src=${{ env.MIMO_REPO }}
             grok2api_src=${{ env.GROK2API_REPO }}

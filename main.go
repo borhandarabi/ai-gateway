@@ -113,7 +113,7 @@ var managedEnvKeys = []string{
 	"BIND_ADDR", "API_PORT", "PROXY_PORT",
 	"SINGBOX_PATH", "SINGBOX_VERSION", "SINGBOX_INSTALL_DIR", "SINGBOX_NO_AUTO_DOWNLOAD",
 	"CLOUDFLARED_PATH", "CLOUDFLARED_INSTALL_DIR", "DEFAULT_SERVICES",
-	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PORT", "OMNIROUTE_PROXY_PORT", "ZENFREEAPI_PORT", "ZENFREEAPI_PROXY_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
+	"CLASH_SECRET", "CLASH_API_PORT", "MIXED_PORT", "OMNIROUTE_PROXY_PORT", "ZENFREEAPI_PORT", "ZENFREEAPI_PROXY_PORT", "MIMO_PORT", "KIMI_PORT", "DEEPSEEK_PORT", "ZAI_PORT", "GROK2API_PORT", "FLARESOLVERR_PORT", "FLARESOLVERR_PROXY_PORT",
 	"MIMO_PROXY_PORT", "KIMI_PROXY_PORT", "DEEPSEEK_PROXY_PORT", "ZAI_PROXY_PORT", "GROK2API_PROXY_PORT",
 }
 
@@ -127,7 +127,6 @@ var managedEnvDefaults = map[string]string{
 	"CLOUDFLARED_INSTALL_DIR":  "bin",
 	"CLASH_API_PORT":           "9090",
 	"MIXED_PORT":               "7890",
-	"OMNIROUTE_PORT":           "20128",
 	"OMNIROUTE_PROXY_PORT":     "20129",
 	"ZENFREEAPI_PORT":          "3008",
 	"ZENFREEAPI_PROXY_PORT":    "2008",
@@ -3535,7 +3534,6 @@ const htmlContent = `<!DOCTYPE html>
     CLASH_SECRET: 'Clash API Secret (password)',
     CLASH_API_PORT: 'Clash / sing-box API port',
     MIXED_PORT: 'Mixed proxy port',
-    OMNIROUTE_PORT: 'OmniRoute port',
     OMNIROUTE_PROXY_PORT: 'OmniRoute proxy port',
     ZENFREEAPI_PORT: 'ZenFreeAPI port',
     ZENFREEAPI_PROXY_PORT: 'ZenFreeAPI proxy port',
@@ -4067,7 +4065,6 @@ func readStateOrDefault() AppState {
 	if !omniRouteFound {
 		s.Services = append(s.Services, ServiceDef{
 			Name:       "omniroute",
-			ListenPort: getEnvIntDefault("OMNIROUTE_PORT", 20128),
 			ProxyPort:  getEnvIntDefault("OMNIROUTE_PROXY_PORT", 20129),
 		})
 		_ = writeState(s)
@@ -4495,7 +4492,7 @@ func bootstrapFreshInstall() {
 	}
 
 	defaultServices := []ServiceDef{
-		{Name: "omniroute", ListenPort: getEnvIntDefault("OMNIROUTE_PORT", 20128), ProxyPort: getEnvIntDefault("OMNIROUTE_PROXY_PORT", 20129)},
+		{Name: "omniroute", ListenPort: getEnvIntDefault("OMNIROUTE_PORT", 0), ProxyPort: getEnvIntDefault("OMNIROUTE_PROXY_PORT", 20129)},
 		{Name: "zenfreeapi", ListenPort: getEnvIntDefault("ZENFREEAPI_PORT", 3008), ProxyPort: getEnvIntDefault("ZENFREEAPI_PROXY_PORT", 2008)},
 		{Name: "mimo", ListenPort: getEnvIntDefault("MIMO_LISTEN_PORT", 3003), ProxyPort: getEnvIntDefault("MIMO_PROXY_PORT", 2003)},
 		{Name: "kimi", ListenPort: getEnvIntDefault("KIMI_LISTEN_PORT", 3002), ProxyPort: getEnvIntDefault("KIMI_PROXY_PORT", 2002)},
