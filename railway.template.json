@@ -80,7 +80,16 @@
         "QWEN2API_PORT": { "defaultValue": "3006", "isOptional": false, "description": "Qwen2API HTTP port." },
         "QWEN2API_PROXY_PORT": { "defaultValue": "2006", "isOptional": false, "description": "Qwen2API outbound proxy port." },
         "QWEN2API_KEY": { "defaultValue": "", "isOptional": true, "description": "Qwen2API client API key." },
-        "RAILWAY_RUN_UID": { "defaultValue": "0", "isOptional": false, "description": "Run as root so Railway volumes are writable by all bundled services." }
+        "RAILWAY_RUN_UID": { "defaultValue": "0", "isOptional": false, "description": "Run as root so Railway volumes are writable by all bundled services." },
+        "ENABLE_FLARESOLVERR": { "defaultValue": "false", "isOptional": true, "description": "Boot FlareSolverr (headless Chromium) at container start; it can also be toggled from the dashboard at runtime. Chromium needs ~400MB+ RAM." },
+        "ENABLE_ZENFREEAPI": { "defaultValue": "false", "isOptional": true, "description": "Boot ZenFreeAPI at container start (dashboard toggle also works)." },
+        "ENABLE_MIMO": { "defaultValue": "false", "isOptional": true, "description": "Boot MimoApi at container start (dashboard toggle also works)." },
+        "ENABLE_ZAI": { "defaultValue": "false", "isOptional": true, "description": "Boot Z.ai API at container start (dashboard toggle also works)." },
+        "ZAI_AUTO_COLLECT": { "defaultValue": "false", "isOptional": true, "description": "Let zai-api collect tokens with headless Chromium on first boot when tokens.sqlite is missing. Heavy (~400MB RAM for minutes)." },
+        "ENABLE_KIMI": { "defaultValue": "false", "isOptional": true, "description": "Boot Kimi API at container start (needs KIMI_ACCESS_TOKEN; dashboard toggle also works)." },
+        "ENABLE_DEEPSEEK": { "defaultValue": "false", "isOptional": true, "description": "Boot DeepSeek proxy at container start (needs DEEPSEEK_TOKEN; dashboard toggle also works)." },
+        "ENABLE_GROK2API": { "defaultValue": "false", "isOptional": true, "description": "Boot Grok2API at container start (dashboard toggle also works)." },
+        "ENABLE_QWEN2API": { "defaultValue": "false", "isOptional": true, "description": "Boot Qwen2API at container start (dashboard toggle also works)." }
       },
       "volumeMounts": { "7f0b7e9e-2e6d-4d0c-9f12-0f3e8d6a1b21-data": { "mountPath": "/data" } }
     },

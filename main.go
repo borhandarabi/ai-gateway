@@ -62,6 +62,10 @@ var systemMetricsState struct {
 	sync.Mutex
 	prevTotal uint64
 	prevIdle  uint64
+	// cgroup CPU sampling: last usage_usec reading + wall clock of that
+	// reading, so the next sample can compute busy% against the wall delta.
+	prevCGPU uint64
+	prevWall int64
 }
 
 const (
@@ -4112,6 +4116,113 @@ type ServiceDef struct {
 	Env        map[string]string `json:"env,omitempty"`
 }
 
+// serviceDefaultEnvs فهرست متغیرهای محیطی هر سرویسِ پیش‌فرض، استخراج‌شده از
+// سورس مخازن اصلی هر سرویس (نه حدسی). مقادیر، پیش‌فرض‌های خودِ آپ‌استریم‌اند؛
+// فقط جایی که bundle اینجا مقدار دیگری تحمیل می‌کند (مثلاً HOST/BIND یا
+// پروکزی که s6 run script ست می‌کند) همان مقدارِ مؤثرِ داخل ایمیج گذاشته
+// شده تا چیزی که کاربر در داشبورد می‌بیند همان باشد که واقعاً اعمال می‌شود.
+// کلیدهای PORT/HOST و HTTP*_PROXY عمداً حذف شده‌اند: این‌ها را run script
+// خودش از ZAI_PORT/MIMO_PORT/... می‌سازد و بازنویسی‌شان می‌کند.
+//
+// Upstream sources:
+//   - zenfreeapi  : github.com/izaart95-jpg/ZenFreeAPI        (src/*.rs)
+//   - mimo        : github.com/hooshidev3/mimo-ai-proxy       (os.Getenv)
+//   - zai         : github.com/borhandarabi/GLM-Free-API      (main.go loadConfig)
+//   - kimi        : github.com/izaart95-jpg/KimiFreeAPI       (main.go envOrDefault)
+//   - deepseek    : github.com/izaart95-jpg/DeepSeekFreeAPI   (main.go envOr)
+//   - grok2api    : config.yaml generated in its s6 run script (server/auth sections)
+//   - qwen2api    : github.com/XxxXTeam/Qwen2API_Go           (internal/config)
+//   - flaresolverr: github.com/Rorqualx/flaresolverr-go        (internal/config)
+var serviceDefaultEnvs = map[string]map[string]string{
+	"zenfreeapi": {
+		"OPENCODE_ZEN_BASE": "https://opencode.ai/zen/v1",
+		"OPENCODE_API_KEY":  "public",
+		"OPENCODE_CLIENT":   "cli",
+	},
+	"mimo": {
+		"CORS_ORIGIN":         "*",
+		"MIMO_API_KEY":        "", // upstream API_KEY: client bearer, enforced only when non-empty
+		"SERVICE_TOKENS":      "", // comma-separated upstream service tokens
+		"USER_IDS":            "", // comma-separated upstream user ids
+		"XIAOMI_CHATBOT_PHS":  "", // comma-separated Xiaomi chatbot PH cookies
+	},
+	"zai": {
+		"ZAI_AUTH_TOKEN": "Waguri", // upstream AUTH_TOKEN default
+		"ZAI_TIMEOUT":    "300000", // ms, upstream TIMEOUT default
+		"ZAI_AGENT_MODE": "true",
+		"ZAI_LOG_LEVEL":  "info", // upstream default is debug; image runs info
+		"ZAI_LOG_FORMAT": "text",
+		"ZAI_AUTO_COLLECT": "false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
+	},
+	"kimi": {
+		"KIMI_ACCESS_TOKEN": "", // empty = service stays down/idle until a real token is set
+		"KIMI_AUTH_KEY":     "Waguri", // upstream AUTH_KEY default
+		"KIMI_DEBUG":        "",
+	},
+	"deepseek": {
+		"DEEPSEEK_TOKEN":    "", // required for the proxy to serve requests
+		"PROXY_API_KEY":     "Waguri-san", // upstream default client key
+	},
+	"grok2api": {
+		"GROK2API_KEY":    "", // bootstrap encryption key; random if left empty
+		"GROK2API_SECRET": "", // bootstrap JWT secret; random if left empty
+	},
+	"qwen2api": {
+		"QWEN2API_KEY":            "Waguri", // upstream API_KEY: also becomes AdminKey
+		"DATA_SAVE_MODE":          "none",
+		"SIMPLE_MODEL_MAP":        "false",
+		"OUTPUT_THINK":            "false",
+		"AUTO_REFRESH":            "true",
+		"AUTO_REFRESH_INTERVAL":   "21600", // seconds (upstream 6h)
+		"CACHE_MODE":              "default",
+		"LOG_LEVEL":               "INFO", // upstream getEnv("LOG_LEVEL", "INFO")
+		"BROWSER_HEADLESS":        "true",
+		"BROWSER_TIMEOUT_SECONDS": "45",
+	},
+	"flaresolverr": {
+		// Keys are the ones its s6 run script exports (FLARESOLVERR_*
+		// prefixed there); upstream flaresolverr-go reads the bare names.
+		"FLARESOLVERR_LOG_LEVEL":                "info",
+		"FLARESOLVERR_LOG_HTML":                 "false",
+		"FLARESOLVERR_HEADLESS":                 "true",
+		"FLARESOLVERR_BROWSER_POOL_SIZE":        "1",    // upstream default 3; image ships 1 for small containers
+		"FLARESOLVERR_BROWSER_POOL_TIMEOUT":     "30s",
+		"FLARESOLVERR_MAX_MEMORY_MB":            "1024", // upstream 2048; image caps at 1024
+		"FLARESOLVERR_SESSION_TTL":              "30m",
+		"FLARESOLVERR_SESSION_CLEANUP_INTERVAL": "1m",
+		"FLARESOLVERR_MAX_SESSIONS":             "100",
+		"FLARESOLVERR_DEFAULT_TIMEOUT":          "60s",
+		"FLARESOLVERR_MAX_TIMEOUT":              "300s",
+		"FLARESOLVERR_RATE_LIMIT_ENABLED":       "true",
+		"FLARESOLVERR_RATE_LIMIT_RPM":           "60",
+	},
+}
+
+// applyServiceDefaultEnvs هر سرویس پیش‌فرضی که هنوز env ندارد را با
+// serviceDefaultEnvs پر می‌کند. کلیدهایی که کاربر قبلاً ست کرده دست‌نخورده
+// می‌مانند — این تابع فقط «مقدارهای غایب» را تکمیل می‌کند تا بعداً از
+// داشبورد (جدول Active services -> Env) قابل ویرایش باشند. خروجی true یعنی
+// تغییری رخ داده و state باید ذخیره شود.
+func applyServiceDefaultEnvs(services []ServiceDef) ([]ServiceDef, bool) {
+	changed := false
+	for i := range services {
+		defaults, ok := serviceDefaultEnvs[services[i].Name]
+		if !ok {
+			continue
+		}
+		if services[i].Env == nil {
+			services[i].Env = make(map[string]string, len(defaults))
+		}
+		for key, value := range defaults {
+			if _, exists := services[i].Env[key]; !exists {
+				services[i].Env[key] = value
+				changed = true
+			}
+		}
+	}
+	return services, changed
+}
+
 func normalizeServiceEnv(env map[string]string) (map[string]string, error) {
 	if len(env) > 128 {
 		return nil, fmt.Errorf("a service may have at most 128 environment variables")
@@ -4279,6 +4390,14 @@ func readStateOrDefault() AppState {
 			ListenPort: getEnvIntDefault("ZENFREEAPI_PORT", 3008),
 			ProxyPort:  getEnvIntDefault("ZENFREEAPI_PROXY_PORT", 2008),
 		})
+		_ = writeState(s)
+	}
+
+	// Seed every default service with its upstream-documented environment
+	// defaults (serviceDefaultEnvs) so they show up editable in the
+	// dashboard's per-service Env editor. Existing user values always win.
+	if updated, changed := applyServiceDefaultEnvs(s.Services); changed {
+		s.Services = updated
 		_ = writeState(s)
 	}
 
@@ -4724,6 +4843,9 @@ func bootstrapFreshInstall() {
 		}
 	}
 	state.Services = defaultServices
+	if seeded, changed := applyServiceDefaultEnvs(state.Services); changed {
+		state.Services = seeded
+	}
 
 	syncServicesToTemplate(state, tmpl)
 
@@ -6615,31 +6737,139 @@ func readSystemMetrics() map[string]interface{} {
 		return metrics
 	}
 
-	total, idle, ok := readProcCPU()
-	if !ok {
-		return metrics
+	// Preferred source inside a container: the cgroup limits imposed by the
+	// runtime (e.g. Railway's 1GB RAM / 2 vCPU). /proc/meminfo describes the
+	// HOST, not this container, so it is only a fallback.
+	if memLimit, memUsed, memOK := readCgroupMemory(); memOK && memLimit > 0 {
+		metrics["system_metrics_available"] = true
+		metrics["memory_percent"] = 100 * float64(memUsed) / float64(memLimit)
+		metrics["memory_used_bytes"] = memUsed
+		metrics["memory_total_bytes"] = memLimit
+	} else if hostTotal, hostAvail, hostOK := readProcMemory(); hostOK && hostTotal > 0 {
+		hostUsed := hostTotal - hostAvail
+		metrics["system_metrics_available"] = true
+		metrics["memory_percent"] = 100 * float64(hostUsed) / float64(hostTotal)
+		metrics["memory_used_bytes"] = hostUsed
+		metrics["memory_total_bytes"] = hostTotal
 	}
-	memTotal, memAvailable, ok := readProcMemory()
-	if !ok || memTotal == 0 {
-		return metrics
+
+	if cpuPercent, ok := readCgroupCPUPercent(); ok {
+		metrics["system_metrics_available"] = true
+		metrics["cpu_percent"] = cpuPercent
+	} else {
+		total, idle, ok := readProcCPU()
+		if !ok {
+			return metrics
+		}
+		systemMetricsState.Lock()
+		if systemMetricsState.prevTotal != 0 && total > systemMetricsState.prevTotal && idle >= systemMetricsState.prevIdle {
+			totalDelta := total - systemMetricsState.prevTotal
+			idleDelta := idle - systemMetricsState.prevIdle
+			metrics["cpu_percent"] = 100 * (1 - float64(idleDelta)/float64(totalDelta))
+		}
+		systemMetricsState.prevTotal = total
+		systemMetricsState.prevIdle = idle
+		systemMetricsState.Unlock()
 	}
+	return metrics
+}
+
+// readCgroupMemory returns (limit, usage, ok) for this container's cgroup.
+// cgroup v2 first (memory.max/memory.current, "max" == unlimited), then v1
+// (memory.limit_in_bytes/memory.usage_in_bytes). ok=false means "no usable
+// cgroup memory data" and the caller falls back to host /proc/meminfo.
+func readCgroupMemory() (limit, usage uint64, ok bool) {
+	const noLimitSentinel = ^uint64(0) // v1 reports 2^64-ish pages for "no limit"
+
+	// --- cgroup v2 ---
+	if b, err := os.ReadFile("/sys/fs/cgroup/memory.max"); err == nil {
+		fields := strings.Fields(string(b))
+		if len(fields) >= 1 && fields[0] != "max" {
+			if v, parseErr := strconv.ParseUint(fields[0], 10, 64); parseErr == nil && v > 0 {
+				limit = v
+			}
+		}
+		if limit > 0 {
+			if u, uErr := os.ReadFile("/sys/fs/cgroup/memory.current"); uErr == nil {
+				if uv, parseErr := strconv.ParseUint(strings.TrimSpace(string(u)), 10, 64); parseErr == nil {
+					usage = uv
+					ok = true
+				}
+			}
+		}
+	}
+	if ok {
+		return limit, usage, true
+	}
+	limit, usage, ok = 0, 0, false
+
+	// --- cgroup v1 fallback ---
+	b, err := os.ReadFile("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+	if err != nil {
+		return 0, 0, false
+	}
+	v, parseErr := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if parseErr != nil || v == 0 || v >= noLimitSentinel {
+		return 0, 0, false // effectively unlimited -> use host stats instead
+	}
+	u, uErr := os.ReadFile("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+	if uErr != nil {
+		return 0, 0, false
+	}
+	uv, parseErr2 := strconv.ParseUint(strings.TrimSpace(string(u)), 10, 64)
+	if parseErr2 != nil {
+		return 0, 0, false
+	}
+	return v, uv, true
+}
+
+// readCgroupCPUPercent samples cpu.stat usage_usec and diffs it against the
+// previous sample taken by an earlier /api/status poll. Returns ok=false
+// until a second sample exists. The result can exceed 100 when the process
+// uses multiple cores (cgroups expose no universally-present quota file), so
+// the ceiling is NumCPU*100 -- same convention `top` uses for host-wide load.
+func readCgroupCPUPercent() (float64, bool) {
+	b, err := os.ReadFile("/sys/fs/cgroup/cpu.stat")
+	if err != nil {
+		return 0, false
+	}
+	var usage uint64
+	found := false
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "usage_usec" {
+			if v, parseErr := strconv.ParseUint(fields[1], 10, 64); parseErr == nil {
+				usage = v
+				found = true
+			}
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	now := time.Now().UnixNano()
 
 	systemMetricsState.Lock()
-	if systemMetricsState.prevTotal != 0 && total > systemMetricsState.prevTotal && idle >= systemMetricsState.prevIdle {
-		totalDelta := total - systemMetricsState.prevTotal
-		idleDelta := idle - systemMetricsState.prevIdle
-		metrics["cpu_percent"] = 100 * (1 - float64(idleDelta)/float64(totalDelta))
+	defer systemMetricsState.Unlock()
+	prevUsage, prevWall := systemMetricsState.prevCGPU, systemMetricsState.prevWall
+	systemMetricsState.prevCGPU = usage
+	systemMetricsState.prevWall = now
+	if prevWall == 0 || usage < prevUsage {
+		return 0, false // first sample since start, or counter reset
 	}
-	systemMetricsState.prevTotal = total
-	systemMetricsState.prevIdle = idle
-	systemMetricsState.Unlock()
-
-	used := memTotal - memAvailable
-	metrics["system_metrics_available"] = true
-	metrics["memory_percent"] = 100 * float64(used) / float64(memTotal)
-	metrics["memory_used_bytes"] = used
-	metrics["memory_total_bytes"] = memTotal
-	return metrics
+	wallDeltaNs := now - prevWall
+	if wallDeltaNs <= 0 {
+		return 0, false
+	}
+	busyNs := int64(usage-prevUsage) * 1000 // usec -> nsec
+	percent := 100 * float64(busyNs) / float64(wallDeltaNs)
+	if ceiling := 100 * float64(runtime.NumCPU()); percent > ceiling {
+		percent = ceiling
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	return percent, true
 }
 
 func readProcCPU() (total, idle uint64, ok bool) {
@@ -10535,7 +10765,38 @@ func createWarpGroupHandler(w http.ResponseWriter, r *http.Request) {
 var (
 	s6ServiceDir = envOrDefault("S6_SERVICE_DIR", "/run/service")
 	s6LogDir     = envOrDefault("S6_LOG_DIR", "/run/log")
+	// s6StateDir نگه‌داری مارکرهای «کاربر این سرویس را روشن/خاموش کرده» است
+	// تا انتخابش بعد از ری‌استارت/ری‌دیپلوی کانتینر هم ماندگار بماند.
+	// gateway-entrypoint.sh همین مارکرها را در بوت بعدی می‌خواند و فایل
+	// down خود s6 را می‌سازد یا برمی‌دارد.
+	s6StateDir = envOrDefault("S6_STATE_DIR", "/data/s6-state")
 )
+
+// s6WriteBootMarker انتخاب کاربر را برای بوت بعدی ثبت می‌کند (up=true یعنی
+// سرویس باید در بوت بعدی بالا بیاید). سرویس هسته (singbox) مارک نمی‌شود:
+// همیشه بالا می‌آید و نباید قابل خاموش‌شدنِ ماندگار باشد.
+func s6WriteBootMarker(name string, up bool) {
+	if name == "singbox" || !isValidS6ServiceName(name) {
+		return
+	}
+	if err := os.MkdirAll(s6StateDir, 0o755); err != nil {
+		log.Printf("s6 marker: cannot create %s: %v", s6StateDir, err)
+		return
+	}
+	upPath := filepath.Join(s6StateDir, name+".up")
+	downPath := filepath.Join(s6StateDir, name+".down")
+	if up {
+		if err := os.WriteFile(upPath, []byte{}, 0o644); err != nil {
+			log.Printf("s6 marker: write %s: %v", upPath, err)
+		}
+		os.Remove(downPath)
+		return
+	}
+	if err := os.WriteFile(downPath, []byte{}, 0o644); err != nil {
+		log.Printf("s6 marker: write %s: %v", downPath, err)
+	}
+	os.Remove(upPath)
+}
 
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -10914,6 +11175,12 @@ func controlS6ServiceHandler(w http.ResponseWriter, r *http.Request) {
 			"error": fmt.Sprintf("s6-svc %s failed: %v (%s)", flag, err, strings.TrimSpace(string(out))),
 		})
 		return
+	}
+	switch action {
+	case "start":
+		s6WriteBootMarker(name, true) // persist for next boot
+	case "stop":
+		s6WriteBootMarker(name, false)
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": fmt.Sprintf("%s: %s issued", name, action)})
 }
@@ -12160,7 +12427,22 @@ func main() {
 	// از UI (شامل خودِ تنظیمات بکاپ) را دوباره بارگذاری کن.
 	loadEnvOverridesCache()
 
+	// Per-service env defaults (serviceDefaultEnvs) that were seeded into
+	// state.json must reach the s6 run scripts too, otherwise the dashboard
+	// would show values that are never applied. Runs AFTER ensureDefaultFiles
+	// (below) so a fresh install — whose bootstrap just created state.json
+	// with the seeded envs — is covered on its very first boot.
+	// applyServiceEnvToRun writes a managed export block into both the
+	// source and live copies of each run script; empty/nil Env is skipped.
 	ensureDefaultFiles()
+	for _, svc := range readStateOrDefault().Services {
+		if len(svc.Env) == 0 {
+			continue
+		}
+		if err := applyServiceEnvToRun(svc.Name, svc.Env); err != nil {
+			log.Printf("startup: applying default env for %q: %v", svc.Name, err)
+		}
+	}
 	autoDownloadSingBoxIfMissing()
 	startBackupScheduler()
 

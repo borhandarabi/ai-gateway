@@ -307,9 +307,11 @@ COPY --from=singbox-manager /out/singbox-manager /usr/local/bin/singbox-manager
 COPY --from=cloudflared-fetch /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=singbox-fetch /usr/local/bin/sing-box /usr/local/bin/sing-box
 
-# --- healthcheck + s6 service tree ---
+# --- healthcheck + boot-state entrypoint + s6 service tree ---
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh
+COPY s6-rc.d/gateway-entrypoint.sh /usr/local/bin/gateway-entrypoint
+RUN chmod +x /usr/local/bin/gateway-entrypoint
 COPY s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 RUN chmod -R +x /etc/s6-overlay/s6-rc.d/*/run /etc/s6-overlay/s6-rc.d/*/up /etc/s6-overlay/s6-rc.d/*/run.sh 2>/dev/null || true
 
@@ -360,4 +362,9 @@ EXPOSE 80 20129 3008 3000 3001 3002 8000 8191 9090 7890 2008 3005 3006
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]
 
-ENTRYPOINT ["/init"]
+# gateway-entrypoint seeds per-service initial up/down state (dashboard
+# choices persist across restarts), then hands over to s6-overlay.
+ENTRYPOINT ["/usr/local/bin/gateway-entrypoint"]
+# Fallback for tooling that expects the plain upstream entrypoint:
+# docker run --entrypoint /init ai-gateway ...
+

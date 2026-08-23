@@ -14,12 +14,21 @@ export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
 export PROXY_SERVER_URL="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
 export PROXY_COLLECTOR_URL="http://127.0.0.1:${ZAI_COLLECTOR_PROXY_PORT:-2007}"
 
-# If no tokens database exists, generate one first.
-# NOTE: token-collector is the actual binary (not token-generator).
-# We must NOT use exec here because we need to copy the result afterwards.
+# Token bootstrap. `zai-api collect` drives a real headless Chromium via
+# Playwright -- hundreds of MB of RAM for minutes. On a 1GB container that
+# can OOM-kill neighbours, so it only runs when explicitly enabled with
+# ZAI_AUTO_COLLECT=true. Without tokens the server still boots; requests
+# just fail until tokens exist (collect from a bigger machine and mount
+# tokens.sqlite, or flip ZAI_AUTO_COLLECT and restart).
 if [ ! -f /data/zai/tokens.sqlite ]; then
-    echo "[zai] No tokens.sqlite found, generating tokens..."
-    ./zai-api collect --tokens 750 --batch 1 --no-tui --parallel 1 --db-path="/data/zai/tokens.sqlite"
+    if [ "${ZAI_AUTO_COLLECT:-false}" = "true" ] || [ "${ZAI_AUTO_COLLECT:-false}" = "1" ]; then
+        echo "[zai] No tokens.sqlite found; auto-collect enabled, generating tokens (Chromium)..."
+        # Not exec: we must copy the produced DB before handing over.
+        ./zai-api collect --tokens 750 --batch 1 --no-tui --parallel 1 --db-path="/data/zai/tokens.sqlite"
+    else
+        echo "[zai] No tokens.sqlite found and ZAI_AUTO_COLLECT != true."
+        echo "[zai] Starting WITHOUT tokens; set ZAI_AUTO_COLLECT=true (restart needed) or provide /data/zai/tokens.sqlite."
+    fi
 fi
 
 # AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
