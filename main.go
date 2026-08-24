@@ -707,7 +707,7 @@ const htmlContent = `<!DOCTYPE html>
   <main id="main">
     <div id="mainContent">
       <div id="clashSecretWarning" style="display:none; background-color: var(--warning); color: #fff; padding: 12px 16px; border-radius: var(--radius); margin-bottom: 20px; font-weight: 500;">
-        ⚠️ هشدار: رمز عبور Clash API (CLASH_SECRET) تعیین نشده است. لطفاً برای امنیت بیشتر از <a href="#settings" onclick="showPage('settings'); return false;" style="color: #fff; text-decoration: underline;">صفحه تنظیمات</a> یک رمز تعیین کنید.
+        ⚠️ هشدار: رمز عبور Clash API (CLASH_SECRET) تعیین نشده است. لطفاً برای امنیت بیشتر از <a href="#proxy" onclick="showPage('proxy'); showProxySection('singbox'); return false;" style="color: #fff; text-decoration: underline;">صفحه Proxy، تب sing-box</a> یک رمز تعیین کنید.
       </div>
 
       <!-- ============ SERVICES ============ -->
@@ -963,45 +963,19 @@ const htmlContent = `<!DOCTYPE html>
         </div>
       </section>
 
-      <!-- ============ S6 SYSTEM SERVICES ============ -->
+      <!-- ============ SYSTEM SERVICES (s6) ============ -->
+      <!-- The old standalone "Services" table panel was removed: every s6
+           service is merged into the Active services table on the Services
+           page (renderS6Services), so a second table titled "Services" was
+           redundant dead UI. Only the Live log panel remains, embedded at
+           the end of the Services page via #serviceLiveLogSlot. -->
       <section class="page" id="page-s6">
-        <div class="page-head">
-          <div>
-            <h1>System Services (s6-overlay)</h1>
-            <p>Start/stop/restart the longrun services supervised by s6-overlay in this container, and watch their live output.</p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h2>Services</h2>
-            <button class="btn btn-ghost btn-sm" onclick="loadS6Services()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg>
-              Refresh
-            </button>
-          </div>
-          <p class="sub" id="s6UnavailableNote" style="display:none; color:var(--danger);"></p>
-          <div style="overflow-x:auto;">
-            <table class="data">
-              <thead>
-                <tr>
-                  <th>Service</th>
-                  <th>Status</th>
-                  <th>PID</th>
-                  <th>Uptime</th>
-                  <th style="min-width:260px;">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="s6ServicesBody"></tbody>
-            </table>
-          </div>
-        </div>
-
         <div class="panel">
           <div class="panel-head">
             <h2>Live log <span id="s6LogTitle" class="hint"></span></h2>
             <button class="btn btn-ghost btn-sm" onclick="stopS6LogStream()">Stop</button>
           </div>
+          <p class="sub" id="s6UnavailableNote" style="display:none; color:var(--danger);"></p>
           <p class="sub">Shows only what gets written from the moment you open a log — no history is kept.</p>
           <pre id="s6LogView" style="background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius); padding:12px; height:340px; overflow-y:auto; font-family:var(--font-mono); font-size:12.5px; white-space:pre-wrap; word-break:break-all;"></pre>
         </div>
@@ -1056,23 +1030,10 @@ const htmlContent = `<!DOCTYPE html>
         <div class="page-head">
           <div>
             <h1>Settings</h1>
-            <p>Manage the management API secret and advanced environment overrides.</p>
+            <p>Advanced environment overrides. The panel auth secret lives in Proxy &rarr; sing-box tab; service ports are managed from the Services page.</p>
           </div>
         </div>
 
-        <div class="panel">
-          <h2>Access secret (CLASH_SECRET)</h2>
-          <p class="sub">A single secret protects both the Clash API (used by dashboards like this one and metacubexd) and this management API's <code>/api/*</code> endpoints (sent as the <code>X-Admin-Token</code> header or <code>?token=</code> query param). There is intentionally no separate admin token — set this one value and it covers both. Leave empty to disable authentication on both — only do this on a trusted local network.</p>
-          <div id="adminTokenStatus" class="row" style="margin-bottom:14px;"></div>
-          <div class="row" style="align-items:flex-end;">
-            <div class="field">
-              <label for="newAdminToken">New secret <span class="hint">(min. 8 characters, or empty to disable)</span></label>
-              <input type="password" id="newAdminToken" placeholder="Leave empty to disable authentication" autocomplete="new-password">
-            </div>
-            <button class="btn btn-primary" onclick="saveAdminToken()">Save</button>
-          </div>
-          <p class="sub" style="margin-top:10px;">This updates the same <code>CLASH_SECRET</code> value shown under Advanced (environment) settings below — changing it here or there has the same effect.</p>
-        </div>
 
         <div class="panel">
           <div class="panel-head">
@@ -1084,6 +1045,32 @@ const htmlContent = `<!DOCTYPE html>
           </div>
           <p class="sub">Detected automatically at startup (PATH, working directory, common install paths) and downloaded automatically if missing.</p>
           <div id="singboxInfo" class="row" style="margin-bottom:14px;"></div>
+
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border);">
+          <h3 style="margin-bottom: 6px; font-size: 14px;">Clash API Secret (password)</h3>
+          <p class="sub">One secret protects BOTH the Clash / sing-box API (dashboards like metacubexd) and this whole management panel's <code>/api/*</code> endpoints (sent as the <code>X-Admin-Token</code> header or <code>?token=</code> query param) — there is intentionally no separate admin token. Leave empty to disable authentication on both — only do this on a trusted local network.</p>
+          <div id="adminTokenStatus" class="row" style="margin-bottom:14px;"></div>
+          <div class="row" style="align-items:flex-end;">
+            <div class="field">
+              <label for="newAdminToken">New secret <span class="hint">(min. 8 characters, or empty to disable)</span></label>
+              <input type="password" id="newAdminToken" placeholder="Leave empty to disable authentication" autocomplete="new-password">
+            </div>
+            <button class="btn btn-primary" onclick="saveAdminToken()">Save</button>
+          </div>
+
+          <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--border);">
+          <h3 style="margin-bottom: 12px; font-size: 14px;">API ports</h3>
+          <div class="row" style="margin-bottom:14px;">
+            <div class="field" style="flex:1;">
+              <label for="env_CLASH_API_PORT">Clash / sing-box API port</label>
+              <input type="number" id="env_CLASH_API_PORT" min="1" max="65535" placeholder="(default: 9090)">
+            </div>
+            <div class="field" style="flex:1;">
+              <label for="env_MIXED_PORT">Mixed proxy port</label>
+              <input type="number" id="env_MIXED_PORT" min="1" max="65535" placeholder="(default: 7890)">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveApiPortSettings()">Save Ports</button>
+          </div>
           <div id="singboxServiceSlot"></div>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
@@ -1930,6 +1917,20 @@ const htmlContent = `<!DOCTYPE html>
         var link = document.createElement('a');
         link.href = url; link.textContent = '/' + name + '/'; link.target = '_blank'; link.rel = 'noreferrer';
         tdUrl.appendChild(link);
+        // AI endpoint hint: when the service is a known AI provider AND has
+        // a proxy port (public reverse-proxy URL), show which endpoint style
+        // clients should use. The proxy strips /name and passes both styles;
+        // this reflects the service's preferred type (set at add time or via
+        // Edit) so operators can copy the right base_url into their tools.
+        var knownAIList = (omniStatus.known_ai_services || []);
+        if (svc.proxy_port > 0 && knownAIList.indexOf(name) !== -1){
+          var epType = (omniStatus.preferred_types && omniStatus.preferred_types[name]) || 'openai-compatible';
+          var epPath = epType === 'anthropic-compatible' ? '/v1/messages' : '/v1/chat/completions';
+          var ep = document.createElement('div');
+          ep.className = 'hint';
+          ep.innerHTML = 'endpoint: <span class="mono">/' + name + epPath + '</span>';
+          tdUrl.appendChild(ep);
+        }
       } else {
         tdUrl.textContent = '-';
       }
@@ -1985,17 +1986,30 @@ const htmlContent = `<!DOCTYPE html>
       var tdOmni = document.createElement('td');
       var knownAI = (omniStatus.known_ai_services || []);
       if (knownAI.indexOf(name) !== -1){
-        var omniLink = (omniStatus.links || {})[name];
-        var omniBtn = document.createElement('button');
-        omniBtn.className = 'btn btn-ghost btn-sm';
-        omniBtn.textContent = omniLink ? ('OmniRoute: ' + omniLink.type) : 'Add to OmniRoute';
-        omniBtn.title = 'Manage this service as a provider in the separate OmniRoute instance';
-        omniBtn.onclick = function(){
-          var internalBase = (omniStatus.internal_base_url || 'http://ai-gateway').replace(/\/+$/, '');
-          var preferredType = (omniStatus.preferred_types && omniStatus.preferred_types[name]) || 'openai-compatible';
-          toggleOmniRouteEditor(tr, svc, omniLink, omniStatus.configured, internalBase + ':' + listenPort + '/v1', omniStatus.suggested_keys && omniStatus.suggested_keys[name], preferredType);
-        };
-        tdOmni.appendChild(omniBtn);
+        // The button is only actionable when OmniRoute actually answered an
+        // authenticated probe (omniStatus.available). Otherwise show WHY it
+        // is unavailable, so "Add to OmniRoute" never promises something the
+        // separate omniroute container cannot deliver right now.
+        if (omniStatus.available){
+          var omniLink = (omniStatus.links || {})[name];
+          var omniBtn = document.createElement('button');
+          omniBtn.className = 'btn btn-ghost btn-sm';
+          omniBtn.textContent = omniLink ? ('OmniRoute: ' + omniLink.type) : 'Add to OmniRoute';
+          omniBtn.title = 'Manage this service as a provider in the separate OmniRoute instance';
+          omniBtn.onclick = function(){
+            var internalBase = (omniStatus.internal_base_url || 'http://ai-gateway').replace(/\/+$/, '');
+            var preferredType = (omniStatus.preferred_types && omniStatus.preferred_types[name]) || 'openai-compatible';
+            toggleOmniRouteEditor(tr, svc, omniLink, omniStatus.configured, internalBase + ':' + listenPort + '/v1', omniStatus.suggested_keys && omniStatus.suggested_keys[name], preferredType);
+          };
+          tdOmni.appendChild(omniBtn);
+        } else {
+          var omniWarn = document.createElement('span');
+          omniWarn.className = 'hint';
+          omniWarn.style.color = 'var(--warning)';
+          omniWarn.textContent = 'OmniRoute unavailable';
+          omniWarn.title = (omniStatus.unavailable_reason || 'OmniRoute is not reachable') + ' -- fix it and this button activates automatically.';
+          tdOmni.appendChild(omniWarn);
+        }
       } else {
         var noOmni = document.createElement('span');
         noOmni.className = 'hint';
@@ -2239,6 +2253,11 @@ const htmlContent = `<!DOCTYPE html>
     var tdProxy = tr.children[2];
     var tdAct = tr.children[5];
 
+    // Pull the full ServiceDef (env, preferred type) from the last load so
+    // the edit form can prefill the endpoint-style selector and the env
+    // editor with current values.
+    var svcDef = (lastServices || []).find(function(s){ return s.name === name; }) || {};
+
     tdName.innerHTML = '';
     var nameInput = document.createElement('input');
     nameInput.type = 'text';
@@ -2265,6 +2284,50 @@ const htmlContent = `<!DOCTYPE html>
     proxyInput.style.width = '80px';
     tdProxy.appendChild(proxyInput);
 
+    // Endpoint style selector -- same values the Add preset uses. Shown for
+    // every service (custom ones too): it drives which public endpoint URL
+    // the row advertises and what "Add to OmniRoute" prefills.
+    var epWrap = document.createElement('div');
+    epWrap.style.cssText = 'margin-top:6px;';
+    var epLabel = document.createElement('label');
+    epLabel.className = 'hint';
+    epLabel.textContent = 'Public endpoint style (when Proxy port is set)';
+    var epSelect = document.createElement('select');
+    [['openai-compatible', 'OpenAI-compatible  (…/v1/chat/completions)'], ['anthropic-compatible', 'Anthropic-compatible  (…/v1/messages)']].forEach(function(pair){
+      var opt = document.createElement('option'); opt.value = pair[0]; opt.textContent = pair[1];
+      epSelect.appendChild(opt);
+    });
+    epSelect.value = svcDef.preferred_omniroute_type || 'openai-compatible';
+    epWrap.appendChild(epLabel);
+    epWrap.appendChild(epSelect);
+    tdProxy.appendChild(epWrap);
+
+    // Inline env editor rows (same key:value model as toggleServiceEnvEditor)
+    var envRows = document.createElement('div');
+    envRows.style.cssText = 'margin-top:6px;display:flex;flex-direction:column;gap:4px;width:260px;';
+    function addEnvRow(key, value){
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:4px;align-items:center;';
+      var keyInput = document.createElement('input');
+      keyInput.type = 'text'; keyInput.placeholder = 'KEY'; keyInput.value = key || '';
+      keyInput.className = 'mono'; keyInput.style.width = '110px';
+      var valInput = document.createElement('input');
+      valInput.type = (key && heuristicSecretField(key)) ? 'password' : 'text';
+      valInput.placeholder = 'value'; valInput.value = value || ''; valInput.style.flex = '1';
+      var rm = document.createElement('button');
+      rm.className = 'btn btn-danger btn-sm'; rm.textContent = '×';
+      rm.title = 'Remove this variable on save';
+      rm.onclick = function(){ row.remove(); };
+      row.appendChild(keyInput); row.appendChild(valInput); row.appendChild(rm);
+      envRows.appendChild(row);
+    }
+    Object.keys(svcDef.env || {}).sort().forEach(function(k){ addEnvRow(k, svcDef.env[k]); });
+    var addEnvBtn = document.createElement('button');
+    addEnvBtn.className = 'btn btn-ghost btn-sm';
+    addEnvBtn.textContent = '+ variable';
+    addEnvBtn.onclick = function(){ addEnvRow('', ''); };
+    envRows.appendChild(addEnvBtn);
+
     tdAct.innerHTML = '';
     var saveBtn = document.createElement('button');
     saveBtn.className = 'btn btn-primary btn-sm';
@@ -2277,13 +2340,32 @@ const htmlContent = `<!DOCTYPE html>
 
       if (!newName){ showMessage('Service name is required', 'danger'); return; }
       if (isNaN(newListen) || newListen < 1 || newListen > 65535){ showMessage('A valid listen port is required', 'danger'); return; }
-      
+
       saveBtn.disabled = true;
-      request('/api/edit_service', { 
-        old_name: name, 
-        new_name: newName, 
+      request('/api/edit_service', {
+        old_name: name,
+        new_name: newName,
         new_listen_port: newListen,
-        new_proxy_port: newProxy
+        new_proxy_port: newProxy,
+        preferred_omniroute_type: epSelect.value,
+        env: (function(){
+          var env = {};
+          var invalid = false;
+          envRows.querySelectorAll('div').forEach(function(row){
+            var inputs = row.querySelectorAll('input');
+            if (inputs.length < 2) return;
+            var k = inputs[0].value.trim();
+            if (!k) return;
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) invalid = true;
+            env[k] = inputs[1].value;
+          });
+          if (invalid){
+            showMessage('Environment keys must be POSIX names (A-Z, 0-9, _).', 'danger');
+            saveBtn.disabled = false;
+            return undefined; // abort the request
+          }
+          return Object.keys(env).length ? env : null;
+        })()
       }, 'Service updated').then(function(ok){
         if (!ok) saveBtn.disabled = false;
       });
@@ -2297,6 +2379,17 @@ const htmlContent = `<!DOCTYPE html>
 
     tdAct.appendChild(saveBtn);
     tdAct.appendChild(cancelBtn);
+
+    // The extended controls (endpoint style + env rows) need more room than
+    // the Actions cell: host them in the Public URL cell — it re-renders on
+    // the next refresh after save.
+    var tdHost = tr.children[3];
+    tdHost.innerHTML = '';
+    var hostTitle = document.createElement('div');
+    hostTitle.className = 'hint';
+    hostTitle.textContent = 'Editing "' + name + '" — environment variables:';
+    tdHost.appendChild(hostTitle);
+    tdHost.appendChild(envRows);
 
     nameInput.focus();
     nameInput.select();
@@ -2373,10 +2466,12 @@ const htmlContent = `<!DOCTYPE html>
       typeWrap.className = 'field';
       typeWrap.style.cssText = 'max-width:280px;margin-top:10px;';
       var typeLabel = document.createElement('label');
-      typeLabel.textContent = 'OmniRoute type (for later)';
+      // Endpoint style for the PUBLIC reverse-proxy URL (only meaningful
+      // when a Proxy port is set -- without it there is no public endpoint).
+      typeLabel.textContent = 'Public endpoint style (when Proxy port is set)';
       var typeSelect = document.createElement('select');
       typeSelect.id = 'svcOmniType';
-      [['openai-compatible', 'OpenAI-compatible'], ['anthropic-compatible', 'Anthropic-compatible']].forEach(function(pair){
+      [['openai-compatible', 'OpenAI-compatible  (…/name/v1/chat/completions)'], ['anthropic-compatible', 'Anthropic-compatible  (…/name/v1/messages)']].forEach(function(pair){
         var opt = document.createElement('option'); opt.value = pair[0]; opt.textContent = pair[1];
         typeSelect.appendChild(opt);
       });
@@ -2384,7 +2479,7 @@ const htmlContent = `<!DOCTYPE html>
       typeWrap.appendChild(typeLabel); typeWrap.appendChild(typeSelect);
       var typeHint = document.createElement('div');
       typeHint.className = 'hint';
-      typeHint.textContent = 'Only prefills the "Add to OmniRoute" form later on -- pick whichever format this service actually speaks.';
+      typeHint.textContent = 'The reverse proxy passes BOTH styles through; this picks the endpoint URL shown to clients and prefills the "Add to OmniRoute" form later.';
       typeWrap.appendChild(typeHint);
       dynamicWrap.appendChild(typeWrap);
     }
@@ -3852,22 +3947,29 @@ const htmlContent = `<!DOCTYPE html>
     BIND_ADDR: 'Bind address (needs manager restart)',
     API_PORT: 'API port (needs manager restart)',
     PROXY_PORT: 'Public reverse proxy port (needs manager restart)',
-    DEFAULT_SERVICES: 'Default proxy services (name:port, e.g. telegram:2083)',
-    CLASH_SECRET: 'Clash API Secret (password)',
-    CLASH_API_PORT: 'Clash / sing-box API port',
-    MIXED_PORT: 'Mixed proxy port',
     OMNIROUTE_PROXY_PORT: 'OmniRoute proxy port',
-    ZENFREEAPI_PORT: 'ZenFreeAPI port',
-    ZENFREEAPI_PROXY_PORT: 'ZenFreeAPI proxy port',
-    MIMO_PORT: 'MimoApi port',
-    KIMI_PORT: 'KimiApi port',
-    DEEPSEEK_PORT: 'DeepSeekApi port',
-    ZAI_PORT: 'ZaiApi / GlmApi port',
-    GROK2API_PORT: 'Grok2Api port',
-    FLARESOLVERR_PORT: 'FlareSolverr port',
-    FLARESOLVERR_PROXY_PORT: 'FlareSolverr proxy port',
     OMNIROUTE_BASE_URL: 'OmniRoute base URL (the separate omniroute container -- see docker-compose.yml)',
     OMNIROUTE_MANAGEMENT_API_KEY: 'OmniRoute management API key (password) -- from OmniRoute dashboard: API Keys -> Create -> enable "manage" scope'
+  };
+  // Keys deliberately NOT shown in Advanced (environment) settings:
+  //  - CLASH_SECRET / CLASH_API_PORT / MIXED_PORT live in Proxy -> sing-box tab
+  //    (secret merged with the panel auth; ports in the "API ports" row there).
+  //  - Every per-service *_PORT / *_PROXY_PORT is edited from the Services
+  //    page (Add preset / per-row Edit + Env) -- the Services page is the
+  //    single source of truth for service ports.
+  var envSettingsHidden = {
+    DEFAULT_SERVICES: true,
+    CLASH_SECRET: true,
+    CLASH_API_PORT: true,
+    MIXED_PORT: true,
+    ZENFREEAPI_PORT: true, ZENFREEAPI_PROXY_PORT: true,
+    MIMO_PORT: true, MIMO_PROXY_PORT: true,
+    KIMI_PORT: true, KIMI_PROXY_PORT: true,
+    DEEPSEEK_PORT: true, DEEPSEEK_PROXY_PORT: true,
+    ZAI_PORT: true, ZAI_PROXY_PORT: true,
+    GROK2API_PORT: true, GROK2API_PROXY_PORT: true,
+    QWEN2API_PORT: true, QWEN2API_PROXY_PORT: true,
+    FLARESOLVERR_PORT: true, FLARESOLVERR_PROXY_PORT: true
   };
   async function loadEnvSettings(){
     try {
@@ -3888,7 +3990,19 @@ const htmlContent = `<!DOCTYPE html>
       keys.forEach(function(key){
         var s = settings[key] || {};
         var val = s.value || s.default_value || '';
-        
+
+        // Keys hosted on other panels (Proxy -> sing-box tab) get their
+        // dedicated inputs filled there; keys in envSettingsHidden are not
+        // shown in this list at all.
+        if (envSettingsHidden[key]) {
+          var movedInput = document.getElementById('env_' + key);
+          if (movedInput && key !== 'CLASH_SECRET') {
+            movedInput.value = s.value || '';
+            if (!s.value && s.default_value) movedInput.placeholder = '(default: ' + s.default_value + ')';
+          }
+          return;
+        }
+
         var extInput = document.getElementById('env_' + key);
         if (extInput && extInput.closest('#envSettingsBody') === null) {
             extInput.value = val;
@@ -3955,6 +4069,22 @@ const htmlContent = `<!DOCTYPE html>
     };
     api('/api/settings/env/update', body).then(function(data){
       showMessage('sing-box configuration saved', 'success');
+      settingsPromise = null;
+      loadEnvSettings();
+    }).catch(function(err){
+      showMessage(err.message, 'danger');
+    });
+  };
+
+  // Proxy -> sing-box tab: Clash API port + mixed proxy port (moved out of
+  // the Advanced environment list; takes effect on next sing-box restart).
+  window.saveApiPortSettings = function(){
+    var body = {
+      CLASH_API_PORT: (document.getElementById('env_CLASH_API_PORT') || {}).value || '',
+      MIXED_PORT: (document.getElementById('env_MIXED_PORT') || {}).value || ''
+    };
+    api('/api/settings/env/update', body).then(function(data){
+      showMessage(data.message || 'API ports saved', 'success');
       settingsPromise = null;
       loadEnvSettings();
     }).catch(function(err){
@@ -7508,10 +7638,10 @@ var omniRouteSuggestedKeyEnv = map[string]struct {
 }{
 	"zai":        {"ZAI_AUTH_TOKEN", "Waguri"},
 	"kimi":       {"KIMI_AUTH_KEY", "Waguri"},
-	"deepseek":   {"PROXY_API_KEY", "Waguri-san"},
+	"deepseek":   {"PROXY_API_KEY", "Waguri"},
 	"qwen2api":   {"QWEN2API_KEY", "Waguri"},
-	"mimo":       {"MIMO_API_KEY", ""},
-	"zenfreeapi": {"OPENCODE_API_KEY", "public"},
+	"mimo":       {"MIMO_API_KEY", "Waguri"},
+	"zenfreeapi": {"OPENCODE_API_KEY", "Waguri"},
 }
 
 func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -7535,8 +7665,20 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 			preferredTypes[svc.Name] = svc.PreferredOmniRouteType
 		}
 	}
+	// reachable/authorized: a REAL probe of OmniRoute, not just "an API key
+	// is configured". The button in the dashboard is gated on this -- an
+	// operator must not get an actionable "Add to OmniRoute" button when the
+	// omniroute container is down or the management key is wrong. A cheap
+	// authenticated GET (provider list) proves both reachability and auth in
+	// one call; anything non-2xx or a transport error sets available=false
+	// together with a human-readable reason. Probe result is cached briefly
+	// (omniRouteProbeCache) so table re-renders every few seconds don't turn
+	// into a request storm against OmniRoute.
+	reachable, probeReason := probeOmniRoute()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"configured":        getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
+		"available":         reachable,
+		"unavailable_reason": probeReason,
 		"base_url":          getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
 		"internal_base_url": getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
 		"links":             links,
@@ -7544,6 +7686,43 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"preferred_types":   preferredTypes,
 		"known_ai_services": knownAIServiceNames(),
 	})
+}
+
+// omniRouteProbeCache کش کوتاه‌مدت نتیجه‌ی probeOmniRoute است: جدول Active
+// services هر چند ثانیه دوباره رندر می‌شود و بدون کش، هر رندر یک درخواست
+// واقعی به OmniRoute می‌فرستاد.
+var (
+	omniRouteProbeMu       sync.Mutex
+	omniRouteProbeOK       bool
+	omniRouteProbeReason   string
+	omniRouteProbeAt       time.Time
+)
+
+func probeOmniRoute() (bool, string) {
+	omniRouteProbeMu.Lock()
+	defer omniRouteProbeMu.Unlock()
+	if time.Since(omniRouteProbeAt) < 15*time.Second {
+		return omniRouteProbeOK, omniRouteProbeReason
+	}
+	if getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") == "" {
+		omniRouteProbeOK = false
+		omniRouteProbeReason = "OMNIROUTE_MANAGEMENT_API_KEY is not set (Settings -> OmniRoute)"
+	} else if status, _, err := omniRouteRequest(http.MethodGet, "/api/providers", nil); err != nil {
+		omniRouteProbeOK = false
+		omniRouteProbeReason = err.Error()
+	} else if status < 200 || status >= 300 {
+		omniRouteProbeOK = false
+		if status == 401 || status == 403 {
+			omniRouteProbeReason = "OmniRoute rejected the management API key (401/403) -- recreate it with the manage scope"
+		} else {
+			omniRouteProbeReason = fmt.Sprintf("OmniRoute answered HTTP %d", status)
+		}
+	} else {
+		omniRouteProbeOK = true
+		omniRouteProbeReason = ""
+	}
+	omniRouteProbeAt = time.Now()
+	return omniRouteProbeOK, omniRouteProbeReason
 }
 
 // POST /api/omniroute/save_link -- افزودن یا ویرایش. تشخیص افزودن-در-برابر-ویرایش
@@ -7981,10 +8160,12 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 // تگ selector مرتبط، و ارجاع‌های route rule را هماهنگ به‌روزرسانی می‌کند.
 func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OldName       string `json:"old_name"`
-		NewName       string `json:"new_name"`
-		NewListenPort int    `json:"new_listen_port"`
-		NewProxyPort  int    `json:"new_proxy_port,omitempty"`
+		OldName              string            `json:"old_name"`
+		NewName              string            `json:"new_name"`
+		NewListenPort        int               `json:"new_listen_port"`
+		NewProxyPort         int               `json:"new_proxy_port,omitempty"`
+		PreferredOmniRoute   string            `json:"preferred_omniroute_type,omitempty"`
+		Env                  map[string]string `json:"env,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
@@ -8007,6 +8188,10 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.NewProxyPort != 0 && (req.NewProxyPort < 1 || req.NewProxyPort > 65535) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid proxy port (1-65535)"})
+		return
+	}
+	if req.PreferredOmniRoute != "" && req.PreferredOmniRoute != "openai-compatible" && req.PreferredOmniRoute != "anthropic-compatible" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "preferred_omniroute_type must be openai-compatible or anthropic-compatible"})
 		return
 	}
 	if req.NewName != req.OldName && reservedServiceNames[req.NewName] {
@@ -8045,11 +8230,34 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional env update: when provided, replace the whole Env map (the
+	// edit form sends the complete desired set) and push it into the s6 run
+	// script, mirroring what the per-row Env editor does. Also persist the
+	// endpoint-style preference used by the dashboard + "Add to OmniRoute".
+	newEnv := state.Services[targetIdx].Env
+	if req.Env != nil {
+		normalized, err := normalizeServiceEnv(req.Env)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		newEnv = normalized
+	}
 	state.Services[targetIdx] = ServiceDef{
-		Name:       req.NewName,
-		ListenPort: req.NewListenPort,
-		ProxyPort:  req.NewProxyPort,
-		Env:        state.Services[targetIdx].Env,
+		Name:                   req.NewName,
+		ListenPort:             req.NewListenPort,
+		ProxyPort:              req.NewProxyPort,
+		Env:                    newEnv,
+		PreferredOmniRouteType: req.PreferredOmniRoute,
+	}
+	if req.Env != nil {
+		// Run-script env only applies to real bundled services; a custom
+		// service has no run script and applyServiceEnvToRun would error.
+		if _, known := findKnownService(req.OldName); known {
+			if err := applyServiceEnvToRun(req.NewName, newEnv); err != nil {
+				log.Printf("edit_service: applying env to %q run script: %v", req.NewName, err)
+			}
+		}
 	}
 
 	if err := writeState(state); err != nil {
