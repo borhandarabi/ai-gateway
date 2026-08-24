@@ -144,22 +144,22 @@ var managedEnvDefaults = map[string]string{
 	// docker-compose.yml همین‌جا "ai-gateway" است، ولی روی Railway باید
 	// "http://ai-gateway.railway.internal" باشد).
 	"AI_GATEWAY_INTERNAL_BASE_URL": "http://ai-gateway",
-	"ZENFREEAPI_PORT":          "3008",
-	"ZENFREEAPI_PROXY_PORT":    "2008",
-	"MIMO_PORT":                "3003",
-	"KIMI_PORT":                "3002",
-	"DEEPSEEK_PORT":            "3005",
-	"ZAI_PORT":                 "3001",
-	"GROK2API_PORT":            "3004",
-	"FLARESOLVERR_PORT":        "8191",
-	"FLARESOLVERR_PROXY_PORT":  "8190",
-	"MIMO_PROXY_PORT":          "2003",
-	"KIMI_PROXY_PORT":          "2002",
-	"DEEPSEEK_PROXY_PORT":      "2005",
-	"ZAI_PROXY_PORT":           "2001",
-	"GROK2API_PROXY_PORT":      "2004",
-	"QWEN2API_PROXY_PORT":      "2006",
-	"QWEN2API_PORT":            "3006",
+	"ZENFREEAPI_PORT":              "3008",
+	"ZENFREEAPI_PROXY_PORT":        "2008",
+	"MIMO_PORT":                    "3003",
+	"KIMI_PORT":                    "3002",
+	"DEEPSEEK_PORT":                "3005",
+	"ZAI_PORT":                     "3001",
+	"GROK2API_PORT":                "3004",
+	"FLARESOLVERR_PORT":            "8191",
+	"FLARESOLVERR_PROXY_PORT":      "8190",
+	"MIMO_PROXY_PORT":              "2003",
+	"KIMI_PROXY_PORT":              "2002",
+	"DEEPSEEK_PROXY_PORT":          "2005",
+	"ZAI_PROXY_PORT":               "2001",
+	"GROK2API_PROXY_PORT":          "2004",
+	"QWEN2API_PROXY_PORT":          "2006",
+	"QWEN2API_PORT":                "3006",
 }
 
 // backupEnvKeys کلیدهای پیکربندی بکاپ/بازیابی هستند. عمداً از همان مکانیزم
@@ -744,6 +744,13 @@ const htmlContent = `<!DOCTYPE html>
         <div class="panel">
           <h2>Add a service</h2>
           <p class="sub">Creates a local inbound plus a matching selector, linked to your default WARP group.</p>
+          <div class="field" style="max-width:360px;margin-bottom:10px;">
+            <label for="svcPreset">Preset</label>
+            <select id="svcPreset" onchange="onServicePresetChange()">
+              <option value="">Custom...</option>
+            </select>
+            <div class="hint" id="svcPresetHint" style="margin-top:4px;"></div>
+          </div>
           <div class="row" style="align-items:flex-end;">
             <div class="field">
               <label for="svcName">Name</label>
@@ -762,6 +769,7 @@ const htmlContent = `<!DOCTYPE html>
               Add service
             </button>
           </div>
+          <div id="svcDynamicFields"></div>
         </div>
 
         <div class="panel">
@@ -1463,6 +1471,7 @@ const htmlContent = `<!DOCTYPE html>
       showPage('services');
     }
     loadAllData();
+    populateServicePresets();
     setInterval(loadSelectors, 12000);
     setInterval(loadStatus, 2000);
   }
@@ -1974,16 +1983,25 @@ const htmlContent = `<!DOCTYPE html>
       tdAct.appendChild(serviceLogBtn);
 
       var tdOmni = document.createElement('td');
-      var omniLink = (omniStatus.links || {})[name];
-      var omniBtn = document.createElement('button');
-      omniBtn.className = 'btn btn-ghost btn-sm';
-      omniBtn.textContent = omniLink ? ('OmniRoute: ' + omniLink.type) : 'Add to OmniRoute';
-      omniBtn.title = 'Manage this service as a provider in the separate OmniRoute instance';
-      omniBtn.onclick = function(){
-        var internalBase = (omniStatus.internal_base_url || 'http://ai-gateway').replace(/\/+$/, '');
-        toggleOmniRouteEditor(tr, svc, omniLink, omniStatus.configured, internalBase + ':' + listenPort + '/v1', omniStatus.suggested_keys && omniStatus.suggested_keys[name]);
-      };
-      tdOmni.appendChild(omniBtn);
+      var knownAI = (omniStatus.known_ai_services || []);
+      if (knownAI.indexOf(name) !== -1){
+        var omniLink = (omniStatus.links || {})[name];
+        var omniBtn = document.createElement('button');
+        omniBtn.className = 'btn btn-ghost btn-sm';
+        omniBtn.textContent = omniLink ? ('OmniRoute: ' + omniLink.type) : 'Add to OmniRoute';
+        omniBtn.title = 'Manage this service as a provider in the separate OmniRoute instance';
+        omniBtn.onclick = function(){
+          var internalBase = (omniStatus.internal_base_url || 'http://ai-gateway').replace(/\/+$/, '');
+          var preferredType = (omniStatus.preferred_types && omniStatus.preferred_types[name]) || 'openai-compatible';
+          toggleOmniRouteEditor(tr, svc, omniLink, omniStatus.configured, internalBase + ':' + listenPort + '/v1', omniStatus.suggested_keys && omniStatus.suggested_keys[name], preferredType);
+        };
+        tdOmni.appendChild(omniBtn);
+      } else {
+        var noOmni = document.createElement('span');
+        noOmni.className = 'hint';
+        noOmni.textContent = '—';
+        tdOmni.appendChild(noOmni);
+      }
 
       tr.appendChild(tdName); tr.appendChild(tdListen); tr.appendChild(tdProxy); tr.appendChild(tdUrl); tr.appendChild(tdLive); tr.appendChild(tdAct); tr.appendChild(tdOmni);
       body.appendChild(tr);
@@ -2085,7 +2103,7 @@ const htmlContent = `<!DOCTYPE html>
     return omniRouteStatusCache;
   }
 
-  function toggleOmniRouteEditor(tr, svc, link, omniConfigured, baseUrlHint, suggestedKey){
+  function toggleOmniRouteEditor(tr, svc, link, omniConfigured, baseUrlHint, suggestedKey, preferredType){
     var next = tr.nextElementSibling;
     if (next && next.dataset.omniEditorFor === svc.name){
       next.remove();
@@ -2139,7 +2157,7 @@ const htmlContent = `<!DOCTYPE html>
       var opt = document.createElement('option'); opt.value = pair[0]; opt.textContent = pair[1];
       typeSelect.appendChild(opt);
     });
-    typeSelect.value = (link && link.type) || 'openai-compatible';
+    typeSelect.value = (link && link.type) || preferredType || 'openai-compatible';
 
     var urlInput = document.createElement('input');
     urlInput.className = 'mono';
@@ -2284,6 +2302,118 @@ const htmlContent = `<!DOCTYPE html>
     nameInput.select();
   }
 
+  // -----------------------------------------------------------------
+  // "Add a service" presets -- driven by /api/known_services (the same
+  // catalog bootstrapFreshInstall and the OmniRoute button use), so this
+  // list never drifts from what's actually installed in the image.
+  // -----------------------------------------------------------------
+  var knownServicesCache = null;
+  async function loadKnownServices(force){
+    if (knownServicesCache && !force) return knownServicesCache;
+    try {
+      var res = await apiFetch('/api/known_services');
+      var data = await res.json();
+      knownServicesCache = data.services || [];
+    } catch (err) {
+      knownServicesCache = [];
+    }
+    return knownServicesCache;
+  }
+
+  async function populateServicePresets(){
+    var select = document.getElementById('svcPreset');
+    if (!select) return;
+    var services = await loadKnownServices();
+    while (select.options.length > 1) select.remove(1);
+    services.forEach(function(ks){
+      var opt = document.createElement('option');
+      opt.value = ks.name;
+      opt.textContent = ks.label + (ks.already_added ? ' (already added)' : '');
+      select.appendChild(opt);
+    });
+  }
+
+  window.onServicePresetChange = async function(){
+    var select = document.getElementById('svcPreset');
+    var presetName = select.value;
+    var nameInput = document.getElementById('svcName');
+    var listenInput = document.getElementById('svcListenPort');
+    var proxyInput = document.getElementById('svcProxyPort');
+    var dynamicWrap = document.getElementById('svcDynamicFields');
+    var hintEl = document.getElementById('svcPresetHint');
+    dynamicWrap.innerHTML = '';
+    hintEl.textContent = '';
+    hintEl.style.color = '';
+
+    if (!presetName){
+      nameInput.value = '';
+      nameInput.readOnly = false;
+      listenInput.value = '';
+      proxyInput.value = '';
+      return;
+    }
+
+    var services = await loadKnownServices();
+    var ks = null;
+    for (var i = 0; i < services.length; i++){ if (services[i].name === presetName){ ks = services[i]; break; } }
+    if (!ks) return;
+
+    nameInput.value = ks.name;
+    nameInput.readOnly = true;
+    listenInput.value = ks.current_listen_port || '';
+    proxyInput.value = ks.current_proxy_port || '';
+
+    if (ks.already_added){
+      hintEl.style.color = '#c0392b';
+      hintEl.textContent = 'Already in Active services -- adding again will fail. Use the Env button on its row instead to change these values.';
+    }
+
+    if (ks.is_ai_provider){
+      var typeWrap = document.createElement('div');
+      typeWrap.className = 'field';
+      typeWrap.style.cssText = 'max-width:280px;margin-top:10px;';
+      var typeLabel = document.createElement('label');
+      typeLabel.textContent = 'OmniRoute type (for later)';
+      var typeSelect = document.createElement('select');
+      typeSelect.id = 'svcOmniType';
+      [['openai-compatible', 'OpenAI-compatible'], ['anthropic-compatible', 'Anthropic-compatible']].forEach(function(pair){
+        var opt = document.createElement('option'); opt.value = pair[0]; opt.textContent = pair[1];
+        typeSelect.appendChild(opt);
+      });
+      typeSelect.value = ks.default_omniroute_type || 'openai-compatible';
+      typeWrap.appendChild(typeLabel); typeWrap.appendChild(typeSelect);
+      var typeHint = document.createElement('div');
+      typeHint.className = 'hint';
+      typeHint.textContent = 'Only prefills the "Add to OmniRoute" form later on -- pick whichever format this service actually speaks.';
+      typeWrap.appendChild(typeHint);
+      dynamicWrap.appendChild(typeWrap);
+    }
+
+    if (ks.fields && ks.fields.length){
+      var fieldsTitle = document.createElement('div');
+      fieldsTitle.style.cssText = 'font-weight:600;margin-top:14px;margin-bottom:6px;';
+      fieldsTitle.textContent = 'Service configuration';
+      dynamicWrap.appendChild(fieldsTitle);
+
+      var grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));gap:10px;';
+      ks.fields.forEach(function(f){
+        var wrap = document.createElement('div');
+        wrap.className = 'field';
+        var label = document.createElement('label');
+        label.textContent = f.label;
+        var input = document.createElement('input');
+        input.type = f.secret ? 'password' : 'text';
+        input.dataset.envKey = f.env_key;
+        input.value = f.current_value || '';
+        if (f.default) input.placeholder = f.default;
+        wrap.appendChild(label); wrap.appendChild(input);
+        grid.appendChild(wrap);
+      });
+      dynamicWrap.appendChild(grid);
+    }
+  };
+
   window.addService = function(){
     var name = document.getElementById('svcName').value.trim();
     var listenPort = parseInt(document.getElementById('svcListenPort').value, 10);
@@ -2292,16 +2422,31 @@ const htmlContent = `<!DOCTYPE html>
 
     if (!name){ showMessage('Service name is required', 'danger'); return; }
     if (isNaN(listenPort) || listenPort < 1 || listenPort > 65535){ showMessage('A valid listen port is required', 'danger'); return; }
-    
-    request('/api/add_service', { 
-      name: name, 
-      listen_port: listenPort,
-      proxy_port: proxyPort 
-    }, 'Service added').then(function(ok){
+
+    var body = { name: name, listen_port: listenPort, proxy_port: proxyPort };
+
+    var omniTypeSelect = document.getElementById('svcOmniType');
+    if (omniTypeSelect) body.preferred_omniroute_type = omniTypeSelect.value;
+
+    var dynamicWrap = document.getElementById('svcDynamicFields');
+    var fieldInputs = dynamicWrap ? dynamicWrap.querySelectorAll('input[data-env-key]') : [];
+    if (fieldInputs.length){
+      var configEnv = {};
+      fieldInputs.forEach(function(input){ configEnv[input.dataset.envKey] = input.value; });
+      body.config_env = configEnv;
+    }
+
+    request('/api/add_service', body, 'Service added').then(function(ok){
       if (ok){
         document.getElementById('svcName').value = '';
+        document.getElementById('svcName').readOnly = false;
         document.getElementById('svcListenPort').value = '';
         document.getElementById('svcProxyPort').value = '';
+        document.getElementById('svcPreset').value = '';
+        document.getElementById('svcDynamicFields').innerHTML = '';
+        document.getElementById('svcPresetHint').textContent = '';
+        knownServicesCache = null;
+        populateServicePresets();
       }
     });
   };
@@ -4114,6 +4259,110 @@ type ServiceDef struct {
 	ListenPort int               `json:"listen_port"`
 	ProxyPort  int               `json:"proxy_port"`
 	Env        map[string]string `json:"env,omitempty"`
+	// PreferredOmniRouteType نوعی است که هنگام «Add a service» (اگر یکی از
+	// سرویس‌های شناخته‌شده‌ی AI با تیک openai/anthropic انتخاب شده باشد) ذخیره
+	// می‌شود -- فقط برای پیش‌پرکردن Type در فرم «Add to OmniRoute» بعدی
+	// استفاده می‌شود، به معنای اتصال واقعی در OmniRoute نیست (آن در
+	// OmniRouteLink.Type نگه‌داری می‌شود).
+	PreferredOmniRouteType string `json:"preferred_omniroute_type,omitempty"`
+}
+
+// ═══════════════════════ Known-service catalog ═══════════════════════════
+// یک منبع واحد حقیقت برای هر سرویسی که واقعاً در این ایمیج (s6-rc.d/*)
+// وجود دارد -- سه جا از همین یک فهرست تغذیه می‌شوند: bootstrapFreshInstall
+// (اولین راه‌اندازی)، فرم «Add a service» (presetها)، و تصمیم اینکه دکمه‌ی
+// «Add to OmniRoute» برای کدام سرویس‌ها نمایش داده شود. هر env var پورت
+// اینجا مستقیماً از خواندن s6-rc.d/<name>/run استخراج شده -- نه حدس؛ نسخه‌ی
+// قبلی bootstrapFreshInstall از نام‌هایی مثل MIMO_LISTEN_PORT/MIMO_PROXY_PORT
+// استفاده می‌کرد که اصلاً در هیچ run scriptای خوانده نمی‌شدند (نام واقعی
+// MIMO_PORT/MIMO_PROXY است) -- یعنی override کردن آن envها هیچ اثری روی
+// پورت واقعی نداشت. اینجا اصلاح شده.
+//
+// این کاتالوگ عمداً فهرست env varهای پیش‌فرض هر سرویس را تکرار نمی‌کند --
+// آن داده از قبل و به‌طور کامل‌تر در serviceDefaultEnvs نگه‌داری می‌شود
+// (منبع serviceDefaultEnvs همان است)؛ knownServicesHandler مستقیماً از آن
+// می‌خواند تا دو منبع حقیقت جدا برای یک چیز نداشته باشیم.
+type knownServiceDef struct {
+	Name             string `json:"name"`
+	Label            string `json:"label"`
+	ListenPortEnv    string `json:"listen_port_env"`
+	ListenPortDef    int    `json:"listen_port_default"`
+	ProxyPortEnv     string `json:"proxy_port_env,omitempty"`
+	ProxyPortDef     int    `json:"proxy_port_default,omitempty"`
+	IsAIProvider     bool   `json:"is_ai_provider"`
+	DefaultOmniRoute string `json:"default_omniroute_type,omitempty"`
+}
+
+// knownServices فهرست کامل سرویس‌های نصب‌شده در این ایمیج است (بدون
+// omniroute -- دیگر بخشی از این ایمیج نیست، در docker-compose.yml/omniroute/
+// به‌صورت کانتینر جدا اجرا می‌شود). ترتیب همان ترتیبی است که در فرم
+// «Add a service» و جدول Active services نمایش داده می‌شود.
+var knownServices = []knownServiceDef{
+	{Name: "mimo", Label: "MimoApi", ListenPortEnv: "MIMO_PORT", ListenPortDef: 3003,
+		ProxyPortEnv: "MIMO_PROXY", ProxyPortDef: 2003,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "zai", Label: "zai-api / GlmApi", ListenPortEnv: "ZAI_PORT", ListenPortDef: 3001,
+		ProxyPortEnv: "ZAI_PROXY_PORT", ProxyPortDef: 2001,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "kimi", Label: "kimi-api", ListenPortEnv: "KIMI_PORT", ListenPortDef: 3002,
+		ProxyPortEnv: "KIMI_PROXY", ProxyPortDef: 2002,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "deepseek", Label: "DeepSeekApi", ListenPortEnv: "DEEPSEEK_PORT", ListenPortDef: 3005,
+		ProxyPortEnv: "DEEPSEEK_PROXY", ProxyPortDef: 2005,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "grok2api", Label: "grok2api-go", ListenPortEnv: "GROK2API_PORT", ListenPortDef: 3004,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "qwen2api", Label: "Qwen2API", ListenPortEnv: "QWEN2API_PORT", ListenPortDef: 3006,
+		ProxyPortEnv: "QWEN2API_PROXY_PORT", ProxyPortDef: 2006,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "zenfreeapi", Label: "ZenFreeAPI", ListenPortEnv: "ZENFREEAPI_PORT", ListenPortDef: 3008,
+		ProxyPortEnv: "ZENFREEAPI_PROXY_PORT", ProxyPortDef: 2008,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "zai-collect", Label: "zai-api collector traffic", ListenPortEnv: "", ListenPortDef: 0,
+		ProxyPortEnv: "ZAI_COLLECTOR_PROXY_PORT", ProxyPortDef: 2007,
+		IsAIProvider: false},
+	{Name: "flaresolverr", Label: "FlareSolverr", ListenPortEnv: "FLARESOLVERR_PORT", ListenPortDef: 8191,
+		ProxyPortEnv: "FLARESOLVERR_PROXY_PORT", ProxyPortDef: 8190,
+		IsAIProvider: false},
+}
+
+func findKnownService(name string) (knownServiceDef, bool) {
+	for _, ks := range knownServices {
+		if ks.Name == name {
+			return ks, true
+		}
+	}
+	return knownServiceDef{}, false
+}
+
+// knownAIServiceNames فقط نام‌های علامت‌خورده به IsAIProvider را برمی‌گرداند --
+// همان فهرستی که تعیین می‌کند دکمه‌ی «Add to OmniRoute» برای کدام ردیف‌های
+// جدول Active services نمایش داده شود (بر اساس نام، نه یک فلگ ذخیره‌شده روی
+// ServiceDef -- چون سرویس‌هایی که پیش از این اضافه شده بودند هم باید بدون
+// migration کار کنند).
+func knownAIServiceNames() []string {
+	var names []string
+	for _, ks := range knownServices {
+		if ks.IsAIProvider {
+			names = append(names, ks.Name)
+		}
+	}
+	return names
+}
+
+// heuristicSecretField چیزی مثل TOKEN/KEY/SECRET/AUTH را در نام یک کلید env
+// تشخیص می‌دهد تا در UI به‌جای متن ساده با password mask نمایش داده شود --
+// serviceDefaultEnvs متادیتای «کدام کلید حساس است» را ذخیره نمی‌کند، پس این
+// حدسِ محافظه‌کارانه (بهتر از نمایش یک secret به‌صورت متن ساده) استفاده
+// می‌شود.
+func heuristicSecretField(envKey string) bool {
+	upper := strings.ToUpper(envKey)
+	for _, marker := range []string{"TOKEN", "KEY", "SECRET", "AUTH", "PASSWORD"} {
+		if strings.Contains(upper, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // serviceDefaultEnvs فهرست متغیرهای محیطی هر سرویسِ پیش‌فرض، استخراج‌شده از
@@ -4140,28 +4389,28 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"OPENCODE_CLIENT":   "cli",
 	},
 	"mimo": {
-		"CORS_ORIGIN":         "*",
-		"MIMO_API_KEY":        "", // upstream API_KEY: client bearer, enforced only when non-empty
-		"SERVICE_TOKENS":      "", // comma-separated upstream service tokens
-		"USER_IDS":            "", // comma-separated upstream user ids
-		"XIAOMI_CHATBOT_PHS":  "", // comma-separated Xiaomi chatbot PH cookies
+		"CORS_ORIGIN":        "*",
+		"MIMO_API_KEY":       "", // upstream API_KEY: client bearer, enforced only when non-empty
+		"SERVICE_TOKENS":     "", // comma-separated upstream service tokens
+		"USER_IDS":           "", // comma-separated upstream user ids
+		"XIAOMI_CHATBOT_PHS": "", // comma-separated Xiaomi chatbot PH cookies
 	},
 	"zai": {
-		"ZAI_AUTH_TOKEN": "Waguri", // upstream AUTH_TOKEN default
-		"ZAI_TIMEOUT":    "300000", // ms, upstream TIMEOUT default
-		"ZAI_AGENT_MODE": "true",
-		"ZAI_LOG_LEVEL":  "info", // upstream default is debug; image runs info
-		"ZAI_LOG_FORMAT": "text",
+		"ZAI_AUTH_TOKEN":   "Waguri", // upstream AUTH_TOKEN default
+		"ZAI_TIMEOUT":      "300000", // ms, upstream TIMEOUT default
+		"ZAI_AGENT_MODE":   "true",
+		"ZAI_LOG_LEVEL":    "info", // upstream default is debug; image runs info
+		"ZAI_LOG_FORMAT":   "text",
 		"ZAI_AUTO_COLLECT": "false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
 	},
 	"kimi": {
-		"KIMI_ACCESS_TOKEN": "", // empty = service stays down/idle until a real token is set
+		"KIMI_ACCESS_TOKEN": "",       // empty = service stays down/idle until a real token is set
 		"KIMI_AUTH_KEY":     "Waguri", // upstream AUTH_KEY default
 		"KIMI_DEBUG":        "",
 	},
 	"deepseek": {
-		"DEEPSEEK_TOKEN":    "", // required for the proxy to serve requests
-		"PROXY_API_KEY":     "Waguri-san", // upstream default client key
+		"DEEPSEEK_TOKEN": "",           // required for the proxy to serve requests
+		"PROXY_API_KEY":  "Waguri-san", // upstream default client key
 	},
 	"grok2api": {
 		"GROK2API_KEY":    "", // bootstrap encryption key; random if left empty
@@ -4185,7 +4434,7 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"FLARESOLVERR_LOG_LEVEL":                "info",
 		"FLARESOLVERR_LOG_HTML":                 "false",
 		"FLARESOLVERR_HEADLESS":                 "true",
-		"FLARESOLVERR_BROWSER_POOL_SIZE":        "1",    // upstream default 3; image ships 1 for small containers
+		"FLARESOLVERR_BROWSER_POOL_SIZE":        "1", // upstream default 3; image ships 1 for small containers
 		"FLARESOLVERR_BROWSER_POOL_TIMEOUT":     "30s",
 		"FLARESOLVERR_MAX_MEMORY_MB":            "1024", // upstream 2048; image caps at 1024
 		"FLARESOLVERR_SESSION_TTL":              "30m",
@@ -4357,24 +4606,6 @@ func readStateOrDefault() AppState {
 		}
 		s.DockerServices = nil
 		_ = writeState(s) // save immediately after migration
-	}
-
-	// Keep the built-in OmniRoute service present for installations that were
-	// created before it became a first-class service. This migration preserves
-	// any user-edited ports when the service already exists.
-	omniRouteFound := false
-	for _, svc := range s.Services {
-		if svc.Name == "omniroute" {
-			omniRouteFound = true
-			break
-		}
-	}
-	if !omniRouteFound {
-		s.Services = append(s.Services, ServiceDef{
-			Name:       "omniroute",
-			ProxyPort:  getEnvIntDefault("OMNIROUTE_PROXY_PORT", 20129),
-		})
-		_ = writeState(s)
 	}
 
 	zenFreeFound := false
@@ -4806,17 +5037,26 @@ func bootstrapFreshInstall() {
 		}
 	}
 
-	defaultServices := []ServiceDef{
-		{Name: "omniroute", ListenPort: getEnvIntDefault("OMNIROUTE_PORT", 0), ProxyPort: getEnvIntDefault("OMNIROUTE_PROXY_PORT", 20129)},
-		{Name: "zenfreeapi", ListenPort: getEnvIntDefault("ZENFREEAPI_PORT", 3008), ProxyPort: getEnvIntDefault("ZENFREEAPI_PROXY_PORT", 2008)},
-		{Name: "mimo", ListenPort: getEnvIntDefault("MIMO_LISTEN_PORT", 3003), ProxyPort: getEnvIntDefault("MIMO_PROXY_PORT", 2003)},
-		{Name: "kimi", ListenPort: getEnvIntDefault("KIMI_LISTEN_PORT", 3002), ProxyPort: getEnvIntDefault("KIMI_PROXY_PORT", 2002)},
-		{Name: "deepseek", ListenPort: getEnvIntDefault("DEEPSEEK_LISTEN_PORT", 3005), ProxyPort: getEnvIntDefault("DEEPSEEK_PROXY_PORT", 2005)},
-		{Name: "zai", ListenPort: getEnvIntDefault("ZAI_LISTEN_PORT", 3001), ProxyPort: getEnvIntDefault("ZAI_PROXY_PORT", 2001)},
-		{Name: "zai-collect", ListenPort: getEnvIntDefault("ZAI_COLLECT_LISTEN_PORT", 0), ProxyPort: getEnvIntDefault("ZAI_COLLECTOR_PROXY_PORT", 2007)},
-		{Name: "grok2api", ListenPort: getEnvIntDefault("GROK2API_LISTEN_PORT", 3004), ProxyPort: getEnvIntDefault("GROK2API_PROXY_PORT", 2004)},
-		{Name: "qwen2api", ListenPort: getEnvIntDefault("QWEN2API_PORT", 3006), ProxyPort: getEnvIntDefault("QWEN2API_PROXY_PORT", 2006)},
-		{Name: "flaresolverr", ListenPort: getEnvIntDefault("FLARESOLVERR_PORT", 8191), ProxyPort: getEnvIntDefault("FLARESOLVERR_PROXY_PORT", 8190)},
+	// از knownServices ساخته می‌شود (نه یک لیست هاردکدشده‌ی جدا) تا این دو هرگز
+	// از هم عقب نیفتند -- نسخه‌ی قبلی این تابع یک کپی دستی و قدیمی داشت که
+	// نام env varهای غلط (مثلاً MIMO_LISTEN_PORT به‌جای MIMO_PORT واقعی) و یک
+	// ردیف omniroute که دیگر بخشی از این ایمیج نیست را همراه داشت.
+	defaultServices := make([]ServiceDef, 0, len(knownServices))
+	for _, ks := range knownServices {
+		listenPort := 0
+		if ks.ListenPortEnv != "" {
+			listenPort = getEnvIntDefault(ks.ListenPortEnv, ks.ListenPortDef)
+		}
+		proxyPort := 0
+		if ks.ProxyPortEnv != "" {
+			proxyPort = getEnvIntDefault(ks.ProxyPortEnv, ks.ProxyPortDef)
+		}
+		defaultServices = append(defaultServices, ServiceDef{
+			Name:                   ks.Name,
+			ListenPort:             listenPort,
+			ProxyPort:              proxyPort,
+			PreferredOmniRouteType: ks.DefaultOmniRoute,
+		})
 	}
 	// Add user-defined default services
 	for _, svc := range parseDefaultServices() {
@@ -7175,6 +7415,7 @@ func syncServicesToTemplate(state AppState, tmpl map[string]interface{}) {
 //  2. POST /api/providers  -- با ارجاع به همان node id، یک "connection"
 //     (نام + API key) می‌سازد؛ این همان چیزی‌ست که در داشبورد OmniRoute به‌عنوان
 //     provider واقعی دیده می‌شود.
+//
 // نوع یک node بعد از ساخت غیرقابل‌تغییر است (updateProviderNodeSchema سمت
 // OmniRoute اصلاً فیلد type ندارد) -- اگر اپراتور نوع را عوض کند، این کد
 // node قبلی را حذف و یکی نو می‌سازد.
@@ -7265,11 +7506,12 @@ var omniRouteSuggestedKeyEnv = map[string]struct {
 	envKey string
 	envDef string
 }{
-	"zai":      {"ZAI_AUTH_TOKEN", "Waguri"},
-	"kimi":     {"KIMI_AUTH_KEY", "Waguri"},
-	"deepseek": {"PROXY_API_KEY", ""},
-	"qwen2api": {"QWEN2API_KEY", "Waguri"},
-	"mimo":     {"MIMO_API_KEY", ""},
+	"zai":        {"ZAI_AUTH_TOKEN", "Waguri"},
+	"kimi":       {"KIMI_AUTH_KEY", "Waguri"},
+	"deepseek":   {"PROXY_API_KEY", "Waguri-san"},
+	"qwen2api":   {"QWEN2API_KEY", "Waguri"},
+	"mimo":       {"MIMO_API_KEY", ""},
+	"zenfreeapi": {"OPENCODE_API_KEY", "public"},
 }
 
 func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -7284,12 +7526,23 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 			suggestedKeys[service] = v
 		}
 	}
+	// preferredTypes از خودِ ServiceDef می‌آید (اگر هنگام «Add a service» با
+	// یک preset ذخیره شده باشد) -- برای پیش‌پرکردن Type در فرم OmniRoute،
+	// به‌جای همیشه فرض کردن openai-compatible.
+	preferredTypes := map[string]string{}
+	for _, svc := range state.Services {
+		if svc.PreferredOmniRouteType != "" {
+			preferredTypes[svc.Name] = svc.PreferredOmniRouteType
+		}
+	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
 		"configured":        getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
 		"base_url":          getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
 		"internal_base_url": getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
 		"links":             links,
 		"suggested_keys":    suggestedKeys,
+		"preferred_types":   preferredTypes,
+		"known_ai_services": knownAIServiceNames(),
 	})
 }
 
@@ -7484,11 +7737,79 @@ func omniRouteRemoveLinkHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": "Removed from OmniRoute"})
 }
 
+// GET /api/known_services -- کاتالوگ سرویس‌های شناخته‌شده (knownServices) را
+// همراه مقدار زنده‌ی فعلی هر فیلد و اینکه آیا از قبل به Active services
+// اضافه شده یا نه، برمی‌گرداند -- برای پرکردن preset dropdown در
+// «Add a service». فهرست فیلدهای هر سرویس مستقیماً از serviceDefaultEnvs
+// خوانده می‌شود (همان چیزی که applyServiceDefaultEnvs برای پرکردن خودکار
+// Env هر سرویس استفاده می‌کند) تا این کاتالوگ یک کپی دومِ ناهم‌گام از آن
+// داده نباشد.
+func knownServicesHandler(w http.ResponseWriter, r *http.Request) {
+	state := readStateOrDefault()
+	existing := map[string]bool{}
+	for _, s := range state.Services {
+		existing[s.Name] = true
+	}
+	type fieldOut struct {
+		EnvKey       string `json:"env_key"`
+		Label        string `json:"label"`
+		Secret       bool   `json:"secret"`
+		Default      string `json:"default,omitempty"`
+		CurrentValue string `json:"current_value,omitempty"`
+	}
+	type serviceOut struct {
+		knownServiceDef
+		Fields        []fieldOut `json:"fields,omitempty"`
+		CurrentListen int        `json:"current_listen_port"`
+		CurrentProxy  int        `json:"current_proxy_port,omitempty"`
+		AlreadyAdded  bool       `json:"already_added"`
+	}
+	out := make([]serviceOut, 0, len(knownServices))
+	for _, ks := range knownServices {
+		listen := ks.ListenPortDef
+		if ks.ListenPortEnv != "" {
+			listen = getEnvIntDefault(ks.ListenPortEnv, ks.ListenPortDef)
+		}
+		proxy := 0
+		if ks.ProxyPortEnv != "" {
+			proxy = getEnvIntDefault(ks.ProxyPortEnv, ks.ProxyPortDef)
+		}
+		var fields []fieldOut
+		if defaults, ok := serviceDefaultEnvs[ks.Name]; ok {
+			keys := make([]string, 0, len(defaults))
+			for k := range defaults {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				def := defaults[k]
+				fields = append(fields, fieldOut{
+					EnvKey:       k,
+					Label:        k,
+					Secret:       heuristicSecretField(k),
+					Default:      def,
+					CurrentValue: getSetting(k, def),
+				})
+			}
+		}
+		out = append(out, serviceOut{
+			knownServiceDef: ks,
+			Fields:          fields,
+			CurrentListen:   listen,
+			CurrentProxy:    proxy,
+			AlreadyAdded:    existing[ks.Name],
+		})
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"services": out})
+}
+
 func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string `json:"name"`
-		ListenPort int    `json:"listen_port"`
-		ProxyPort  int    `json:"proxy_port,omitempty"`
+		Name               string            `json:"name"`
+		ListenPort         int               `json:"listen_port"`
+		ProxyPort          int               `json:"proxy_port,omitempty"`
+		ConfigEnv          map[string]string `json:"config_env,omitempty"`
+		PreferredOmniRoute string            `json:"preferred_omniroute_type,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("addServiceHandler: invalid JSON: %v", err)
@@ -7514,6 +7835,19 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("%q is a reserved name and cannot be used for a service", req.Name)})
 		return
 	}
+	if req.PreferredOmniRoute != "" && req.PreferredOmniRoute != "openai-compatible" && req.PreferredOmniRoute != "anthropic-compatible" {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "preferred_omniroute_type must be openai-compatible or anthropic-compatible"})
+		return
+	}
+	var configEnv map[string]string
+	if len(req.ConfigEnv) > 0 {
+		var err error
+		configEnv, err = normalizeServiceEnv(req.ConfigEnv)
+		if err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+			return
+		}
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -7534,14 +7868,33 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// اگر config_env فرستاده شده، فقط برای سرویس‌های واقعاً شناخته‌شده (که یک
+	// s6-rc.d/<name>/run واقعی دارند) اعمالش کن -- برای یک نام دلخواه/سفارشی
+	// معنا ندارد (applyServiceEnvToRun هم به همین دلیل خودش خطا می‌دهد).
+	if len(configEnv) > 0 {
+		if _, known := findKnownService(req.Name); !known {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known services, not %q", req.Name)})
+			return
+		}
+		if err := applyServiceEnvToRun(req.Name, configEnv); err != nil {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
+			return
+		}
+	}
+
 	state.Services = append(state.Services, ServiceDef{
-		Name:       req.Name,
-		ListenPort: req.ListenPort,
-		ProxyPort:  req.ProxyPort,
+		Name:                   req.Name,
+		ListenPort:             req.ListenPort,
+		ProxyPort:              req.ProxyPort,
+		Env:                    configEnv,
+		PreferredOmniRouteType: req.PreferredOmniRoute,
 	})
 	if err := writeState(state); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
 		return
+	}
+	if len(configEnv) > 0 {
+		restartS6ServiceIfWanted(req.Name)
 	}
 
 	var tmpl map[string]interface{}
@@ -12600,6 +12953,7 @@ func main() {
 	http.HandleFunc("/api/get_configs", requireAuth(requireMethod(http.MethodGet, getConfigsHandler)))
 	http.HandleFunc("/api/status", requireAuth(requireMethod(http.MethodGet, statusHandler)))
 	http.HandleFunc("/api/rebuild", requireAuth(requireMethod(http.MethodPost, rebuildHandler)))
+	http.HandleFunc("/api/known_services", requireAuth(requireMethod(http.MethodGet, knownServicesHandler)))
 	http.HandleFunc("/api/add_service", requireAuth(requireMethod(http.MethodPost, addServiceHandler)))
 	http.HandleFunc("/api/edit_service", requireAuth(requireMethod(http.MethodPost, editServiceHandler)))
 	http.HandleFunc("/api/update_service_env", requireAuth(requireMethod(http.MethodPost, updateServiceEnvHandler)))

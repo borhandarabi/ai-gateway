@@ -191,13 +191,21 @@ For Railway, see `omniroute/README.md` (two options: the maintainer's own
 one-click template, or deploying this repo's `omniroute/` directory as its
 own Railway service).
 
-### Adding the six ai-gateway services as providers
+### Adding the seven ai-gateway services as providers
 
 This is a **manual, per-service step from ai-gateway's own dashboard** (not
 automatic, and not something you have to do from OmniRoute's dashboard
 directly): open ai-gateway's **Active services** table, click **"Add to
 OmniRoute"** next to a service, review the prefilled form, and save.
 Editing and removing later reuse the same button on that row.
+
+The button only appears for the seven services this image actually knows
+are AI providers -- MimoApi, zai-api, kimi-api, DeepSeekApi, grok2api-go,
+Qwen2API, ZenFreeAPI -- driven by the same `knownServices` catalog described
+in "Adding a service from a preset" below (`is_ai_provider` in
+`GET /api/known_services`), not a fixed list duplicated in the frontend.
+Anything else in the table (a custom service you added yourself,
+`flaresolverr`, `zai-collect`) shows a plain `—` in that column instead.
 
 #### What actually happens when you click Save
 
@@ -246,8 +254,8 @@ provider-specific about how they're stored.
 
 #### Where the API key value comes from
 
-The form's API key field is **prefilled automatically for four of the six
-services**, read live from that service's own already-configured auth
+The form's API key field is **prefilled automatically for five of the
+seven services**, read live from that service's own already-configured auth
 setting (the same value visible on the Settings page) -- pulled from the
 exact env var each service's own s6 run script reads as its **client-facing**
 key, not whatever upstream credential it also happens to need:
@@ -256,9 +264,10 @@ key, not whatever upstream credential it also happens to need:
 |---|---|---|
 | zai-api / GlmApi | `ZAI_AUTH_TOKEN` | |
 | kimi-api | `KIMI_AUTH_KEY` | **Not** `KIMI_ACCESS_TOKEN` -- that one is kimi.com's own upstream session token the service needs to even start, unrelated to what a client presents to kimi-api's own `/v1/chat/completions`. |
-| DeepSeekApi | `PROXY_API_KEY` | **Not** `DEEPSEEK_TOKEN` -- same distinction as kimi above (upstream vs. client-facing). `PROXY_API_KEY` is empty by default, meaning no auth is required locally unless you set one. |
+| DeepSeekApi | `PROXY_API_KEY` | **Not** `DEEPSEEK_TOKEN` -- same distinction as kimi above (upstream vs. client-facing). Its effective default is `Waguri-san`, not empty -- DeepSeekFreeAPI's own `envOr("PROXY_API_KEY", "Waguri-san")` falls back to that placeholder for *any* empty value, and the run script always sets it (even to `""`) so the fallback always fires unless you set a real value. |
 | Qwen2API | `QWEN2API_KEY` | |
-| MimoApi | `MIMO_API_KEY` | mimo-ai-proxy's own `internal/middleware/auth.go` reads `API_KEY` from the environment and only enforces it when non-empty. `s6-rc.d/mimo/run` now passes this through -- it didn't before, so this service was always open regardless of upstream support until this was wired up. |
+| MimoApi | `MIMO_API_KEY` | mimo-ai-proxy's own `internal/middleware/auth.go` reads `API_KEY` from the environment and only enforces it when non-empty (genuinely open if left blank, unlike DeepSeek above -- confirmed from source, not assumed). `s6-rc.d/mimo/run` now passes this through -- it didn't before, so this service was always open regardless of upstream support until this was wired up. |
+| ZenFreeAPI | `OPENCODE_API_KEY` | Not a local access gate -- ZenFreeAPI forwards whatever `Authorization` header a client sends straight upstream to OpenCode Zen, falling back to this value if the client sends none. Suggesting it here just means OmniRoute presents the same key ZenFreeAPI would use anyway. |
 | grok2api-go | *(nothing)* | **Not** `GROK2API_SECRET` (`jwtSecret` in its config) -- that key only signs admin-dashboard session JWTs (`adminauth.NewService` in its `application.go`), a completely separate system from the client key that actually guards `/v1/chat/completions` (`ClientAuth` -> `clientkeyapp.Service.Authenticate` in its `middleware/auth.go`). That client key can only be minted from grok2api's own admin panel (`admin`/`admin123456` default login) today, not from a static env var -- generate one there and paste it in manually. |
 
 If a value is prefilled, you can still overwrite it before saving -- it's a
@@ -286,19 +295,70 @@ the service you're adding actually speaks on its own listen port:
 | DeepSeekApi | ✅ | ❌ | OpenAI-compatible |
 | grok2api-go | ✅ | ✅ (native) | OpenAI-compatible |
 | Qwen2API | ✅ | ✅ (native) | OpenAI-compatible |
+| ZenFreeAPI | ✅ | ❌ | OpenAI-compatible |
 
 zai-api, grok2api-go, and Qwen2API do serve a native `/v1/messages` endpoint
 of their own (verified in their upstream source, not assumed), so those
 three *can* be added via the Anthropic-compatible path instead if you
 specifically want to exercise their native implementation -- functionally
 it makes no difference to OmniRoute's own clients either way, so
-**OpenAI-compatible is the recommended, more-tested path for all six**,
+**OpenAI-compatible is the recommended, more-tested path for all seven**,
 kept uniform on purpose (and it's what the form defaults to).
 
 On Railway, set `AI_GATEWAY_INTERNAL_BASE_URL` to
 `http://ai-gateway.railway.internal` if `ai-gateway` is deployed as a
 separate Railway service in the same project -- the form's Base URL prefill
 picks that up automatically instead of the docker-compose default.
+
+### Adding a service from a preset
+
+"Add a service" (above the Active services table) has a **Preset** dropdown
+sourced from `GET /api/known_services` -- the same catalog that drives the
+"Add to OmniRoute" button visibility above and the built-in defaults every
+fresh install starts with (see below). Picking one of the nine services
+this image actually ships (mimo, zai, kimi, deepseek, grok2api, qwen2api,
+zenfreeapi, flaresolverr, zai-collect) instead of leaving it on "Custom...":
+
+- Locks the **Name** field to that service's real name (required for the
+  next two points to work -- it has to match the actual `s6-rc.d/<name>`
+  directory).
+- Prefills **Listen port** / **Proxy port** from the service's own
+  currently-configured values (its real env var, e.g. `MIMO_PORT`, not a
+  guess).
+- For the seven AI providers, shows an **OmniRoute type** selector
+  (OpenAI-compatible / Anthropic-compatible) -- this is only a preference
+  saved for later; it prefills the "Add to OmniRoute" form's type field
+  once you get there, it does not call OmniRoute itself at this point.
+- Renders that service's own **configuration fields**, sourced from the
+  same `serviceDefaultEnvs` map that already auto-fills every default
+  service's Env on every state read (see "Resolved issues" below) -- so
+  this form and the per-row Env editor never show two different sets of
+  defaults for the same service. Saving applies whatever you typed to the
+  real service the same way the Env button does: rewrites
+  `s6-rc.d/<name>/run`'s defaults and restarts that service.
+
+"Custom..." keeps the previous free-form behavior for anything not in the
+catalog (an arbitrary named routing target, matching `DEFAULT_SERVICES`'s
+`name:port` format).
+
+#### What a fresh install starts with
+
+A brand-new install (no existing `template.json`/`nodes.json`) seeds
+**Active services with all nine catalog entries automatically** -- the
+seven AI providers plus `flaresolverr` and `zai-collect` -- using their real
+current port env vars, not hardcoded numbers. `DEFAULT_SERVICES` (still
+`name:port`, comma-separated) is *additional* to this: anything you list
+there is layered on top of the nine built-in ones, for services outside
+this image entirely (matching the original `telegram:2083`-style use case).
+
+This replaced two bugs found while building the preset feature:
+`bootstrapFreshInstall` previously read env vars like `MIMO_LISTEN_PORT`
+that nothing in this image ever set (the real var is `MIMO_PORT`), so
+overriding those ports never actually worked; and a separate migration path
+in `readStateOrDefault` force-re-added an `omniroute` row into Active
+services on every single request -- a leftover from before OmniRoute was
+pulled out into its own image/container, which meant deleting that stale
+row by hand never stuck. Both are gone now.
 
 
 
@@ -314,6 +374,20 @@ picks that up automatically instead of the docker-compose default.
 
 ## Resolved issues
 
+- **Stale `omniroute` row kept reappearing in Active services** —
+  `readStateOrDefault` had a migration block that force-re-added an
+  `omniroute` `ServiceDef` on every single request, left over from before
+  OmniRoute was pulled out into its own container. Deleting that row from
+  the dashboard never stuck. Removed entirely.
+- **`bootstrapFreshInstall` read env vars nothing ever set** — its
+  hardcoded default-service list used names like `MIMO_LISTEN_PORT`,
+  `KIMI_LISTEN_PORT`, `DEEPSEEK_LISTEN_PORT`, `GROK2API_LISTEN_PORT` that no
+  run script (or anything else) ever reads or sets -- the real vars are
+  `MIMO_PORT`/`KIMI_PORT`/`DEEPSEEK_PORT`/`GROK2API_PORT`. Overriding those
+  ports for a fresh install silently had no effect. Fixed by building the
+  default list from the same `knownServices` catalog the "Add a service"
+  presets and OmniRoute button now use, instead of a separate hand-written
+  copy.
 - **OmniRoute removed** — the final image used to be built `FROM` OmniRoute's
   own prebuilt Node/Next.js image, which made OmniRoute "free" to include but
   meant a full Node process ran alongside every other service at all times.
