@@ -9,16 +9,18 @@
 # "execlineb: fatal: unable to exec ifelse: No such file or directory" and the
 # container crash-loops (~1/s). Upstream /init avoids this by being #!/bin/sh
 # and adding /bin,/usr/bin,/command to PATH itself before anything else.
-# We mirror that here. Container env is available DIRECTLY at this point
-# (Docker passes it), so contenv indirection is unnecessary anyway.
 #
-# Purpose: decide which s6 longrun services start "up" vs "down" at boot,
-# WITHOUT touching the image's service definitions. s6-overlay honours an
-# empty `down` file in a service definition dir: if present when s6-rc
-# compiles/starts, the longrun comes up supervised but NOT running
-# (status: down, no process). The dashboard's existing Start/Stop buttons
-# (/api/s6/services/{name}/start|stop -> s6-svc -u/-d) work exactly as
-# before; we only choose the INITIAL state.
+# WHAT THIS SCRIPT DOES NOW (v3):
+# It no longer touches s6-rc service definitions at all. Writing an empty
+# `down` file into the SOURCE definition dir does NOT survive compilation:
+# per skarnet docs (s6-rc-compile), ./down files in definition directories
+# are deliberately ignored/not replicated into the generated live dirs.
+# Instead it just COMPUTES the boot-stop list (which services the operator
+# wants down at this boot) and stores it at $S6_BOOTDOWN_FILE. The real
+# stopping is done later, once every longrun is up, by the `service-bootdown`
+# oneshot which depends on all of them and runs `/command/s6-svc -d` against
+# each listed service under /run/service -- exactly what the dashboard Stop
+# button does.
 #
 # State model (persistent across restarts/redeploys), kept in
 # /data/s6-state (survives container replacement because /data is a volume):
@@ -60,14 +62,20 @@ addpath /command
 export PATH
 
 STATE_DIR="${S6_STATE_DIR:-/data/s6-state}"
-SRC_DIR="${S6_SOURCE_DIR:-/etc/s6-overlay/s6-rc.d}"
+# NOTE: deliberately NOT under /run/s6 -- preinit later does `s6-rmrf /run/s6`,
+# which would wipe the file before service-bootdown ever reads it. /tmp lives
+# on the container's writable layer and survives the whole boot process.
+BOOTDOWN="${S6_BOOTDOWN_FILE:-/tmp/ai-gateway-bootstop}"
 mkdir -p "$STATE_DIR" 2>/dev/null || STATE_DIR="/tmp/s6-state"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 # Managed longruns. Must match servicedir names under $SRC_DIR. The core
 # gateway service (singbox) is deliberately NOT managed here: it always
-# boots, or there is no dashboard to turn anything on.
+# boots, or there is no dashboard to turn anything on. The *-log companions
+# are stopped too (see service-bootdown): a stopped producer with a running
+# logger looks "up" to nothing but still burns a supervisor each.
 ALL_SERVICES="zenfreeapi mimo zai kimi deepseek grok2api qwen2api flaresolverr cloudflared"
+LOG_SERVICES="zenfreeapi-log mimo-log zai-log kimi-log deepseek-log grok2api-log qwen2api-log flaresolverr-log singbox-log cloudflared-log"
 
 is_true () {
     case "${1:-}" in
@@ -76,57 +84,60 @@ is_true () {
     esac
 }
 
-for svc in $ALL_SERVICES ; do
-    svc_dir="$SRC_DIR/$svc"
-    test -d "$svc_dir" || continue # unknown service in list -> skip silently
-    down_file="$svc_dir/down"
+: > "$BOOTDOWN"
 
+want_down () {
     # 1) explicit env override wins for THIS boot and persists via marker
-    eval "env_val=\${ENABLE_$(echo "$svc" | tr 'a-z' 'A-Z'):-}"
+    eval "env_val=\${ENABLE_$(echo "$1" | tr 'a-z' 'A-Z'):-}"
     if test -n "$env_val" ; then
-        rm -f "$STATE_DIR/$svc.up" "$STATE_DIR/$svc.down" 2>/dev/null || true
+        rm -f "$STATE_DIR/$1.up" "$STATE_DIR/$1.down" 2>/dev/null || true
         if is_true "$env_val" ; then
-            : > "$STATE_DIR/$svc.up"
-            rm -f "$down_file"
-        else
-            : > "$STATE_DIR/$svc.down"
-            : > "$down_file"
+            : > "$STATE_DIR/$1.up"
+            return 1
         fi
-        continue
+        : > "$STATE_DIR/$1.down"
+        return 0
     fi
-
     # 2) persistent marker from a previous dashboard toggle wins
-    if test -f "$STATE_DIR/$svc.up" ; then
-        rm -f "$down_file"
-        continue
+    if test -f "$STATE_DIR/$1.up" ; then
+        return 1
     fi
-    if test -f "$STATE_DIR/$svc.down" ; then
-        : > "$down_file"
-        continue
+    if test -f "$STATE_DIR/$1.down" ; then
+        return 0
     fi
-
     # 3) default policy: core + tunnel up, everything else off
-    keep_up=0
-    case "$svc" in
+    case "$1" in
         cloudflared)
-            test -n "${TUNNEL_TOKEN:-}" && keep_up=1
+            test -n "${TUNNEL_TOKEN:-}" && return 1
+            return 0
             ;;
     esac
-    if test "$keep_up" -eq 1 ; then
-        rm -f "$down_file"
-    else
-        : > "$down_file"
+    return 0 # everything not explicitly kept up boots DOWN
+}
+
+for svc in $ALL_SERVICES ; do
+    if want_down "$svc" ; then
+        echo "$svc" >> "$BOOTDOWN"
+        # stop its logger as well so the pipeline does not linger half-up;
+        # loggers have their own names, markers do not manage them directly.
+        for lg in $LOG_SERVICES ; do
+            if test "${lg%-log}" = "$svc" ; then
+                echo "$lg" >> "$BOOTDOWN"
+            fi
+        done
     fi
 done
 
-echo "[gateway-entrypoint] initial service states:"
+echo "[gateway-entrypoint] services to keep UP this boot:"
+up_any=0
 for svc in $ALL_SERVICES ; do
-    if test -f "$SRC_DIR/$svc/down" ; then
-        echo "[gateway-entrypoint]   $svc: down"
-    else
+    if ! grep -qx "$svc" "$BOOTDOWN" ; then
         echo "[gateway-entrypoint]   $svc: up"
+        up_any=1
     fi
 done
+test "$up_any" -eq 1 || echo "[gateway-entrypoint]   (none -- all optional services start down)"
+echo "[gateway-entrypoint] boot-stop list -> $BOOTDOWN ($(wc -l < "$BOOTDOWN") entries)"
 
 # Hand control to s6-overlay with the upstream argv contract ("$@" matters:
 # rc.init runs S6_CMD_ARG0 with these as CMD). exec keeps PID 1 semantics

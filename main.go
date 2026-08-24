@@ -6778,14 +6778,47 @@ func readSystemMetrics() map[string]interface{} {
 // cgroup v2 first (memory.max/memory.current, "max" == unlimited), then v1
 // (memory.limit_in_bytes/memory.usage_in_bytes). ok=false means "no usable
 // cgroup memory data" and the caller falls back to host /proc/meminfo.
+//
+// The returned usage EXCLUDES reclaimable file cache (inactive_file on v2,
+// total_inactive_file on v1) -- the same adjustment `docker stats` makes --
+// so the dashboard shows memory programs actually hold instead of a number
+// inflated by page cache that the kernel can drop at any moment.
 func readCgroupMemory() (limit, usage uint64, ok bool) {
-	const noLimitSentinel = ^uint64(0) // v1 reports 2^64-ish pages for "no limit"
+	// v1 reports 9223372036854771712 (~LLONG_MAX rounded to PAGE_SIZE) for
+	// "no limit", NOT MaxUint64. Anything >= ~2^62 is treated as unlimited.
+	const noLimitSentinel = uint64(1) << 62
+
+	readInactiveFile := func(v2 bool) uint64 {
+		var path string
+		if v2 {
+			path = "/sys/fs/cgroup/memory.stat"
+		} else {
+			path = "/sys/fs/cgroup/memory/memory.stat"
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return 0
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				// v2 name: inactive_file; v1 name: total_inactive_file
+				if fields[0] == "inactive_file" || fields[0] == "total_inactive_file" {
+					if v, parseErr := strconv.ParseUint(fields[1], 10, 64); parseErr == nil {
+						return v
+					}
+					return 0
+				}
+			}
+		}
+		return 0
+	}
 
 	// --- cgroup v2 ---
 	if b, err := os.ReadFile("/sys/fs/cgroup/memory.max"); err == nil {
 		fields := strings.Fields(string(b))
 		if len(fields) >= 1 && fields[0] != "max" {
-			if v, parseErr := strconv.ParseUint(fields[0], 10, 64); parseErr == nil && v > 0 {
+			if v, parseErr := strconv.ParseUint(fields[0], 10, 64); parseErr == nil && v > 0 && v < noLimitSentinel {
 				limit = v
 			}
 		}
@@ -6799,6 +6832,11 @@ func readCgroupMemory() (limit, usage uint64, ok bool) {
 		}
 	}
 	if ok {
+		if inactive := readInactiveFile(true); inactive < usage {
+			usage -= inactive
+		} else {
+			usage = 0
+		}
 		return limit, usage, true
 	}
 	limit, usage, ok = 0, 0, false
@@ -6820,56 +6858,126 @@ func readCgroupMemory() (limit, usage uint64, ok bool) {
 	if parseErr2 != nil {
 		return 0, 0, false
 	}
-	return v, uv, true
+	usage = uv
+	if inactive := readInactiveFile(false); inactive < usage {
+		usage -= inactive
+	} else {
+		usage = 0
+	}
+	return v, usage, true
 }
 
-// readCgroupCPUPercent samples cpu.stat usage_usec and diffs it against the
-// previous sample taken by an earlier /api/status poll. Returns ok=false
-// until a second sample exists. The result can exceed 100 when the process
-// uses multiple cores (cgroups expose no universally-present quota file), so
-// the ceiling is NumCPU*100 -- same convention `top` uses for host-wide load.
+// readCgroupCPUPercent samples this container's cumulative CPU time and diffs
+// it against the previous sample taken by an earlier /api/status poll.
+// Returns ok=false until a second sample exists or when no container-level
+// counter is readable. v2 exposes /sys/fs/cgroup/cpu.stat:usage_usec; v1 has
+// NO cpu.stat -- its equivalent is cpuacct.usage (nanoseconds), which must be
+// read explicitly or we would silently report HOST-wide numbers from
+// /proc/stat instead of the container's.
+//
+// The result is normalized against the effective CPU allowance so "100%"
+// means the whole quota the runtime gave us (e.g. Railway's 2 vCPU):
+// v2 via cpu.max ("$quota $period", default "max 100000"), v1 via
+// cfs_quota_us/cfs_period_us. Without any quota it falls back to NumCPU.
 func readCgroupCPUPercent() (float64, bool) {
-	b, err := os.ReadFile("/sys/fs/cgroup/cpu.stat")
-	if err != nil {
-		return 0, false
-	}
-	var usage uint64
-	found := false
-	for _, line := range strings.Split(string(b), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "usage_usec" {
-			if v, parseErr := strconv.ParseUint(fields[1], 10, 64); parseErr == nil {
-				usage = v
-				found = true
+	var usageNs uint64
+	haveUsage := false
+
+	// --- cgroup v2 ---
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.stat"); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "usage_usec" {
+				if v, parseErr := strconv.ParseUint(fields[1], 10, 64); parseErr == nil {
+					usageNs = v * 1000 // usec -> nsec
+					haveUsage = true
+				}
 			}
 		}
 	}
-	if !found {
+
+	// --- cgroup v1 fallback ---
+	if !haveUsage {
+		if b, err := os.ReadFile("/sys/fs/cgroup/cpuacct/cpuacct.usage"); err == nil {
+			if v, parseErr := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); parseErr == nil {
+				usageNs = v // already nanoseconds
+				haveUsage = true
+			}
+		}
+	}
+	if !haveUsage {
 		return 0, false
 	}
+
+	// Effective core count from the CPU quota (v2 cpu.max / v1 cfs files).
+	effectiveCores := float64(runtime.NumCPU())
+	if q, p, quotaOK := readCPUQuota(); quotaOK && q > 0 && p > 0 {
+		effectiveCores = float64(q) / float64(p)
+	}
+	if effectiveCores <= 0 {
+		effectiveCores = float64(runtime.NumCPU())
+	}
+
 	now := time.Now().UnixNano()
 
 	systemMetricsState.Lock()
 	defer systemMetricsState.Unlock()
 	prevUsage, prevWall := systemMetricsState.prevCGPU, systemMetricsState.prevWall
-	systemMetricsState.prevCGPU = usage
+	systemMetricsState.prevCGPU = usageNs
 	systemMetricsState.prevWall = now
-	if prevWall == 0 || usage < prevUsage {
+	if prevWall == 0 || usageNs < prevUsage {
 		return 0, false // first sample since start, or counter reset
 	}
 	wallDeltaNs := now - prevWall
 	if wallDeltaNs <= 0 {
 		return 0, false
 	}
-	busyNs := int64(usage-prevUsage) * 1000 // usec -> nsec
-	percent := 100 * float64(busyNs) / float64(wallDeltaNs)
-	if ceiling := 100 * float64(runtime.NumCPU()); percent > ceiling {
-		percent = ceiling
+	busyNs := int64(usageNs - prevUsage)
+	percent := 100 * float64(busyNs) / (float64(wallDeltaNs) * effectiveCores)
+	if percent > 100 {
+		percent = 100
 	}
 	if percent < 0 {
 		percent = 0
 	}
 	return percent, true
+}
+
+// readCPUQuota returns (quotaUs, periodUs, ok) for the current cgroup.
+// v2: cpu.max holds "$quota $period" where "max" means no quota. v1:
+// cpu.cfs_quota_us (-1 == none) + cpu.cfs_period_us.
+func readCPUQuota() (quota, period int64, ok bool) {
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		fields := strings.Fields(string(b))
+		if len(fields) == 2 {
+			p, perr := strconv.ParseInt(fields[1], 10, 64)
+			if perr != nil || p <= 0 {
+				return 0, 0, false
+			}
+			if fields[0] == "max" {
+				return 0, p, false // no quota; caller keeps NumCPU
+			}
+			q, qerr := strconv.ParseInt(fields[0], 10, 64)
+			if qerr != nil || q <= 0 {
+				return 0, 0, false
+			}
+			return q, p, true
+		}
+	}
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"); err == nil {
+		q, qerr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+		if qerr != nil || q <= 0 { // -1 or invalid => unlimited
+			return 0, 0, false
+		}
+		p := int64(100000) // kernel default period
+		if pb, perr := os.ReadFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us"); perr == nil {
+			if pv, perr2 := strconv.ParseInt(strings.TrimSpace(string(pb)), 10, 64); perr2 == nil && pv > 0 {
+				p = pv
+			}
+		}
+		return q, p, true
+	}
+	return 0, 0, false
 }
 
 func readProcCPU() (total, idle uint64, ok bool) {

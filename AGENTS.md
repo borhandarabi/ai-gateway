@@ -48,17 +48,29 @@ Files outside main.go:
 Longruns: `singbox`(core, always up) zenfreeapi mimo zai kimi deepseek grok2api qwen2api flaresolverr cloudflared.
 Oneshots: network-mode-init, singbox-ready (+*-log companions, *-pipeline).
 
-## 3. Boot policy & service control (as of 2026-08-24)
+## 3. Boot policy & service control (v3, 2026-08-24)
 
 - Default: everything boots DOWN except `singbox` (never manageable) and `cloudflared`
   (only when `TUNNEL_TOKEN` set). `ENABLE_<NAME>=true|false` env forces a service's initial
-  state and persists it via markers. Dashboard Start/Stop writes the same markers.
-- Mechanism is s6-native: an empty `down` file in the servicedir before s6-rc compile =
-  supervised but not started. NEVER reintroduce `exec sleep infinity` idle stubs — they hide
-  real status from `s6-svstat`/dashboard (kimi/deepseek/cloudflared legacy stubs were removed
-  in favor of this).
+  state and persists it via markers in `/data/s6-state`. Dashboard Start/Stop writes the same
+  markers (`s6WriteBootMarker`).
+- **CRITICAL s6 fact (cost us a bug):** writing an empty `down` file into a service
+  DEFINITION dir does NOT work — `s6-rc-compile` deliberately ignores/does-not-replicate
+  ./down files from definition dirs (skarnet docs). The only supported runtime mechanism is
+  `/command/s6-svc -d /run/service/<name>` after the bundle is up. Implementation:
+  `gateway-entrypoint.sh` computes the boot-stop list -> `$S6_BOOTDOWN_FILE`
+  (**default /tmp/ai-gateway-bootstop — NEVER under /run/s6, preinit `s6-rmrf`s that tree**)
+  and the `service-bootdown` oneshot (depends on all managed longruns + loggers + pipelines,
+  registered in user/contents.d) runs `s6-svc -d` against each entry once everything is up.
+  The oneshot also stops matching `*-log` services so pipelines don't linger half-up.
+- **NEVER use `exec sleep infinity` idle stubs** — they hide real status from
+  `s6-svstat`/dashboard. Status truth = `/command/s6-svstat -o up,wantedup,pid,updownfor`.
+  healthcheck.sh asks s6-svstat directly; do not reintroduce marker-file checks there.
+- UI button gating (main.go renderS6Services/actionBtn): Start enabled ONLY when status is
+  stopped/unhealthy-wanted-down; Stop/Restart only when up or unhealthy. `wantedup=false`
+  means "deliberately down".
 - `ZAI_AUTO_COLLECT=true` gates zai's first-boot token collection (`./zai-api collect ...`)
-  which launches REAL headless Chromium via Playwright (~400MB+) — off by default because of
+  which launches REAL headless Chromium via Playwright (~400MB+) -- off by default because of
   the 1GB budget. Without tokens.sqlite the server still boots; requests fail until tokens exist.
 
 ## 4. Upstream sources & complete env inventory (verified 2026-08-24)
@@ -186,14 +198,20 @@ NOTE: "FLARESOLVERR_CAPTCHA_SOLVER" belongs to the OLD Python port — the Go po
    `BIND_ADDR`, `<SVC>_PROXY_PORT`.
 2. **Metrics**: inside a container `/proc/meminfo` & `/proc/stat` describe the HOST. Railway
    showed ~70% while the container was OOMing at its 1GB cap. Always read cgroup first
-   (v2 `/sys/fs/cgroup/memory.{max,current}`, `cpu.stat usage_usec`; v1 fallback
-   `memory/memory.limit_in_bytes` sentinel ≈ 2^64 means unlimited).
+   (v2 `/sys/fs/cgroup/memory.{max,current}` + `memory.stat:inactive_file`, `cpu.stat
+   usage_usec` + quota from `cpu.max`; v1 fallback `memory/memory.limit_in_bytes`,
+   `cpuacct/cpuacct.usage` for CPU — v1 has NO cpu.stat). Sentinel gotchas:
+   v1 no-limit memory = **9223372036854771712** (~LLONG_MAX page-rounded), NOT MaxUint64;
+   compare against `1<<62`. `memory.current`/`usage_in_bytes` include reclaimable page
+   cache — subtract inactive_file like `docker stats` does or numbers look inflated.
+   Normalize CPU% by the effective quota (quota/period) so 100% == whole allowance.
 3. **s6**: status truth = `s6-svstat -o up,wantedup,pid,updownfor /run/service/<name>`.
-   Stop = `s6-svc -d` (writes nothing to disk) — boot-time down needs the `down` FILE in the
-   SOURCE dir before `/init`. Persistence markers live in `/data/s6-state` (volume ⇒ survives
+   Stop = `s6-svc -d` (runtime only). Boot-time down CANNOT come from a `down` file in the
+   source definition dir (s6-rc-compile ignores it) — use the service-bootdown oneshot
+   mechanism (see §3). Persistence markers live in `/data/s6-state` (volume ⇒ survives
    redeploy). `gateway-entrypoint.sh` precedence: ENABLE_* env > marker > default policy.
-4. **healthcheck** must skip `$S6_SERVICE_DIR/<name>/down` services or a deliberately-stopped
-   service marks the whole container unhealthy.
+4. **healthcheck** must ask `s6-svstat` (wantedup=false ⇒ deliberately stopped) and SKIP
+   those services, or a deliberately-stopped service marks the whole container unhealthy.
 5. **grok2api config.yaml is generate-once** — env changes need the file deleted.
 6. **Railway template**: add new operator-facing vars to `railway.template.json` variables AND
    `.env.example`; Railway caps each image at 1GB/2vCPU — Chromium services (flaresolverr,
