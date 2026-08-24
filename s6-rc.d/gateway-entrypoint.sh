@@ -1,5 +1,16 @@
-#!/command/with-contenv bash
-# gateway-entrypoint -- runs BEFORE /init (s6-overlay) on container boot.
+#!/bin/sh -e
+# gateway-entrypoint -- ENTRYPOINT of the image; hands over to s6-overlay.
+#
+# WHY POSIX sh AND NOT #!/command/with-contenv bash:
+# At ENTRYPOINT time s6-overlay's preinit has NOT run yet, so PATH is still
+# Docker's default (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
+# WITHOUT /command. `with-contenv` is an execlineb script whose first command
+# is the bare name `ifelse`; execlineb resolves it via PATH -> not found ->
+# "execlineb: fatal: unable to exec ifelse: No such file or directory" and the
+# container crash-loops (~1/s). Upstream /init avoids this by being #!/bin/sh
+# and adding /bin,/usr/bin,/command to PATH itself before anything else.
+# We mirror that here. Container env is available DIRECTLY at this point
+# (Docker passes it), so contenv indirection is unnecessary anyway.
 #
 # Purpose: decide which s6 longrun services start "up" vs "down" at boot,
 # WITHOUT touching the image's service definitions. s6-overlay honours an
@@ -23,7 +34,30 @@
 # ENABLE_* env vars (evaluated once per boot, before marker logic):
 #   ENABLE_FLARESOLVERR=true|false etc. force that service's initial state
 #   and persist the choice via markers.
-set -e
+
+# Mirror upstream /init: make sure s6 tools are reachable before anything else.
+addpath () {
+    x=$1
+    OIFS=$IFS
+    IFS=:
+    set -- $PATH
+    IFS=$OIFS
+    while test $# -gt 0 ; do
+        if test "$1" = "$x" ; then
+            return
+        fi
+        shift
+    done
+    PATH="$x:$PATH"
+}
+
+if test -z "$PATH" ; then
+    PATH=/bin
+fi
+addpath /bin
+addpath /usr/bin
+addpath /command
+export PATH
 
 STATE_DIR="${S6_STATE_DIR:-/data/s6-state}"
 SRC_DIR="${S6_SOURCE_DIR:-/etc/s6-overlay/s6-rc.d}"
@@ -35,65 +69,66 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # boots, or there is no dashboard to turn anything on.
 ALL_SERVICES="zenfreeapi mimo zai kimi deepseek grok2api qwen2api flaresolverr cloudflared"
 
-is_true() {
-  case "${1:-}" in
-    true|TRUE|True|1|yes|YES|Yes|on|ON|On) return 0 ;;
-    *) return 1 ;;
-  esac
+is_true () {
+    case "${1:-}" in
+        true|TRUE|True|1|yes|YES|Yes|on|ON|On) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
-for svc in $ALL_SERVICES; do
-  svc_dir="$SRC_DIR/$svc"
-  [ -d "$svc_dir" ] || continue # unknown service in list -> skip silently
-  down_file="$svc_dir/down"
+for svc in $ALL_SERVICES ; do
+    svc_dir="$SRC_DIR/$svc"
+    test -d "$svc_dir" || continue # unknown service in list -> skip silently
+    down_file="$svc_dir/down"
 
-  # 1) explicit env override wins for THIS boot and persists via marker
-  env_val="$(printenv "ENABLE_$(echo "$svc" | tr 'a-z' 'A-Z')" || true)"
-  if [ -n "$env_val" ]; then
-    rm -f "$STATE_DIR/$svc.up" "$STATE_DIR/$svc.down" 2>/dev/null || true
-    if is_true "$env_val"; then
-      : > "$STATE_DIR/$svc.up"
-      rm -f "$down_file"
-    else
-      : > "$STATE_DIR/$svc.down"
-      : > "$down_file"
+    # 1) explicit env override wins for THIS boot and persists via marker
+    eval "env_val=\${ENABLE_$(echo "$svc" | tr 'a-z' 'A-Z'):-}"
+    if test -n "$env_val" ; then
+        rm -f "$STATE_DIR/$svc.up" "$STATE_DIR/$svc.down" 2>/dev/null || true
+        if is_true "$env_val" ; then
+            : > "$STATE_DIR/$svc.up"
+            rm -f "$down_file"
+        else
+            : > "$STATE_DIR/$svc.down"
+            : > "$down_file"
+        fi
+        continue
     fi
-    continue
-  fi
 
-  # 2) persistent marker from a previous dashboard toggle wins
-  if [ -f "$STATE_DIR/$svc.up" ]; then
-    rm -f "$down_file"
-    continue
-  fi
-  if [ -f "$STATE_DIR/$svc.down" ]; then
-    : > "$down_file"
-    continue
-  fi
+    # 2) persistent marker from a previous dashboard toggle wins
+    if test -f "$STATE_DIR/$svc.up" ; then
+        rm -f "$down_file"
+        continue
+    fi
+    if test -f "$STATE_DIR/$svc.down" ; then
+        : > "$down_file"
+        continue
+    fi
 
-  # 3) default policy: core + tunnel up, everything else off
-  keep_up=0
-  case "$svc" in
-    cloudflared)
-      [ -n "${TUNNEL_TOKEN:-}" ] && keep_up=1
-      ;;
-  esac
-  if [ "$keep_up" -eq 1 ]; then
-    rm -f "$down_file"
-  else
-    : > "$down_file"
-  fi
+    # 3) default policy: core + tunnel up, everything else off
+    keep_up=0
+    case "$svc" in
+        cloudflared)
+            test -n "${TUNNEL_TOKEN:-}" && keep_up=1
+            ;;
+    esac
+    if test "$keep_up" -eq 1 ; then
+        rm -f "$down_file"
+    else
+        : > "$down_file"
+    fi
 done
 
 echo "[gateway-entrypoint] initial service states:"
-for svc in $ALL_SERVICES; do
-  if [ -f "$SRC_DIR/$svc/down" ]; then
-    echo "[gateway-entrypoint]   $svc: down"
-  else
-    echo "[gateway-entrypoint]   $svc: up"
-  fi
+for svc in $ALL_SERVICES ; do
+    if test -f "$SRC_DIR/$svc/down" ; then
+        echo "[gateway-entrypoint]   $svc: down"
+    else
+        echo "[gateway-entrypoint]   $svc: up"
+    fi
 done
 
-# Hand control to s6-overlay with the upstream argv contract. exec keeps
-# PID 1 semantics (signal handling, zombie reaping) intact.
-exec /init
+# Hand control to s6-overlay with the upstream argv contract ("$@" matters:
+# rc.init runs S6_CMD_ARG0 with these as CMD). exec keeps PID 1 semantics
+# (signal handling, zombie reaping) intact.
+exec /init "$@"
