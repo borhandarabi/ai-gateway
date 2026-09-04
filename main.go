@@ -320,6 +320,10 @@ const htmlContent = `<!DOCTYPE html>
     --surface-hover:#1b2231;
     --border:#212938;
     --border-soft:#1a2130;
+    /* legacy aliases kept so every inline style resolves */
+    --bg-alt:#0d1119;
+    --muted:#8b93a8;
+    --primary:#5b8cff;
     --text:#e8ebf3;
     --text-muted:#8b93a8;
     --text-dim:#565f74;
@@ -415,7 +419,7 @@ const htmlContent = `<!DOCTYPE html>
   }
   @media (prefers-reduced-motion:reduce){ .status-dot.on{animation:none;} }
 
-  #main{flex:1;min-width:0;padding:28px 34px 60px;max-width:1180px;}
+  #main{flex:1;min-width:0;padding:28px 34px 60px;} /* fill the whole area right of the sidebar — no dead space */
   .page{display:none;}
   .page.active{display:block;animation:fadein .18s ease;}
   @keyframes fadein{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:none;}}
@@ -438,19 +442,22 @@ const htmlContent = `<!DOCTYPE html>
   .field label{font-size:12px;color:var(--text-muted);font-weight:500;}
   .field .hint{font-size:11px;color:var(--text-dim);}
   
-  /* Inputs & Selects */
-  input[type=text],input[type=number],input[type=password],select.input{
+  /* Inputs & Selects — style EVERY input/select consistently (bare selects
+     created in JS or markup without .input previously rendered as native
+     OS dropdowns, clashing with the theme) */
+  input[type=text],input[type=number],input[type=password],select{
     background:var(--surface-2);border:1px solid var(--border);color:var(--text);
     border-radius:var(--radius-sm);padding:9px 11px;font-size:13.5px;outline:none;
     transition:border-color .12s,background .12s,box-shadow .12s;
   }
-  select.input {
-    appearance: none; -webkit-appearance: none;
-    background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b93a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
-    padding-right: 32px;
+  select{
+    appearance:none;-webkit-appearance:none;
+    background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b93a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 10px center;background-size:14px;
+    padding-right:32px;cursor:pointer;
   }
-  input[type=text]:focus,input[type=number]:focus,input[type=password]:focus,select.input:focus{
+  select option{background:var(--surface);color:var(--text);}
+  input[type=text]:focus,input[type=number]:focus,input[type=password]:focus,select:focus,select.input:focus{
     border-color:var(--accent);background:#141a27;box-shadow:0 0 0 2px var(--accent-soft);
   }
   input::placeholder{color:var(--text-dim);}
@@ -3957,6 +3964,14 @@ const htmlContent = `<!DOCTYPE html>
   //  - Every per-service *_PORT / *_PROXY_PORT is edited from the Services
   //    page (Add preset / per-row Edit + Env) -- the Services page is the
   //    single source of truth for service ports.
+  //  - Per-service *_API_KEY / *_KEY secrets (MIMO_API_KEY, QWEN2API_KEY, ...)
+  //    are upstream bearer tokens used only by the service's own s6 run
+  //    script; operators edit them via the per-row "Env" editor on the
+  //    Services page. They must never render as plaintext on this page, so
+  //    ANY key matching the pattern is hidden automatically -- including
+  //    keys this list has never heard of (e.g. a newly added AI provider
+  //    arriving via /api/settings/env).
+  var SECRET_ENV_KEY_RE = /_(API_)?KEY$/;
   var envSettingsHidden = {
     DEFAULT_SERVICES: true,
     CLASH_SECRET: true,
@@ -3971,6 +3986,14 @@ const htmlContent = `<!DOCTYPE html>
     QWEN2API_PORT: true, QWEN2API_PROXY_PORT: true,
     FLARESOLVERR_PORT: true, FLARESOLVERR_PROXY_PORT: true
   };
+  function isHiddenEnvKey(key){
+    if (envSettingsHidden[key]) return true;
+    // Keys with a dedicated label on THIS page (e.g.
+    // OMNIROUTE_MANAGEMENT_API_KEY) are deliberately shown here even though
+    // their name matches the secret pattern.
+    if (envSettingLabels[key]) return false;
+    return SECRET_ENV_KEY_RE.test(key);
+  }
   async function loadEnvSettings(){
     try {
       var res = await apiFetch('/api/settings/env');
@@ -3992,9 +4015,10 @@ const htmlContent = `<!DOCTYPE html>
         var val = s.value || s.default_value || '';
 
         // Keys hosted on other panels (Proxy -> sing-box tab) get their
-        // dedicated inputs filled there; keys in envSettingsHidden are not
-        // shown in this list at all.
-        if (envSettingsHidden[key]) {
+        // dedicated inputs filled there; keys matched by isHiddenEnvKey
+        // (per-service ports + *_API_KEY/*_KEY secrets) are not shown in
+        // this list at all.
+        if (isHiddenEnvKey(key)) {
           var movedInput = document.getElementById('env_' + key);
           if (movedInput && key !== 'CLASH_SECRET') {
             movedInput.value = s.value || '';

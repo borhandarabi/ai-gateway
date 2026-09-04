@@ -7,4 +7,5 @@ cache.db
 config.json
 nodes.json
 state.json
+*.exe
 template.json
