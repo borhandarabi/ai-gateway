@@ -19,7 +19,7 @@
 #     --build-context flaresolverr_src=https://github.com/Rorqualx/flaresolverr-go.git#main \
 #     --build-context qwen2api_src=https://github.com/XxxXTeam/Qwen2API_Go.git#main \
 #     --build-context zenfreeapi_src=https://github.com/izaart95-jpg/ZenFreeAPI.git#main \
-#     --build-context zai_src=https://github.com/borhandarabi/GLM-Free-API.git#main \
+#     --build-context zai_src=https://github.com/izaart95-jpg/GLM-Free-API.git#main \
 #     -t ai-gateway:latest .
 #
 # See build.sh / .github/workflows/docker-build.yml for the wired-up version.
@@ -48,7 +48,8 @@ RUN apk add --no-cache git gcc musl-dev
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
 RUN go mod tidy
 # main.go is the actual service entry point.
-RUN go build -trimpath -gcflags="all=-l=4" -ldflags="-s -w" -o /out/zai-api .
+RUN go build -o /out/token-collector -trimpath -gcflags="all=-l=4" -ldflags="-s -w" ./cmd/token-collector
+RUN go build -o /out/zai-api -trimpath -gcflags="all=-l=4" -ldflags="-s -w" .
 
 # ─────────────────────────── Kimi-api (Go) ──────────────────────────
 FROM golang:1.26-alpine AS kimi-builder
@@ -284,6 +285,7 @@ COPY --from=mimo-builder /out/mimoproxy /opt/mimo/mimoproxy
 COPY --from=mimo-builder /src/templates /opt/mimo/templates
 
 COPY --from=zai-builder /out/zai-api /opt/zai/zai-api
+COPY --from=zai-builder /out/token-collector /opt/zai/token-collector
 
 COPY --from=kimi-builder /out/kimi-api /opt/kimi/kimi-api
 COPY --from=deepseek-builder /out/deepseek-proxy /opt/deepseek/deepseek-proxy

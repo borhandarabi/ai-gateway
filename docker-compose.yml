@@ -5,8 +5,8 @@ services:
       dockerfile: Dockerfile
       additional_contexts:
         mimo_src: ${MIMO_REPO:-https://github.com/hooshidev3/mimo-ai-proxy.git#main}
-        grok2api_src: ${GROK2API_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
-        zai_src: ${ZAI_REPO:-https://github.com/borhandarabi/GLM-Free-API.git#main}
+        grok2api_src: ${GROK2API_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
+        zai_src: ${ZAI_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
         deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
         qwen2api_src: ${QWEN2API_REPO:-https://github.com/XxxXTeam/Qwen2API_Go.git#main}

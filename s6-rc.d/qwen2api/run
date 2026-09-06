@@ -5,6 +5,6 @@ cd /opt/qwen2api
 export PORT="${QWEN2API_PORT:-3006}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 
-export PROXY_URL="socks5h://127.0.0.1:${QWEN2API_PROXY_PORT:-2006}"
+export PROXY_URL="http://127.0.0.1:${QWEN2API_PROXY_PORT:-2006}"
 export API_KEY="${QWEN2API_KEY:-Waguri}"
 exec /usr/local/bin/su-exec qwen2api ./qwen2api

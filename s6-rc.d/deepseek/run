@@ -4,12 +4,16 @@ exec 2>&1
 cd /opt/deepseek
 export PORT="${DEEPSEEK_PORT:-3005}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
-export PROXY_API_KEY="${PROXY_API_KEY:-''}"
-export DEEPSEEK_TOKEN="${DEEPSEEK_TOKEN:-'Waguri'}"
+export PROXY_API_KEY="${DEEPSEEK_PROXY_API_KEY:-'Waguri'}"
+export DEEPSEEK_TOKEN="${DEEPSEEK_TOKEN:-''}"
+export AGENT_MODE="${DEEPSEEK_AGENT_MODE:-'true'}"
+export SYNC_MODE="${DEEPSEEK_SYNC_MODE:-'false'}"
+export SESSION_POOL_SIZE="${DEEPSEEK_SESSION_POOL_SIZE:-'5'}"
+export SESSION_ACQUIRE_TIMEOUT="${DEEPSEEK_SESSION_ACQUIRE_TIMEOUT:-'10'}"
 
-export HTTP_PROXY="socks5h://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
-export HTTPS_PROXY="socks5h://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
-export ALL_PROXY="socks5h://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
+export HTTP_PROXY="http://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
+export HTTPS_PROXY="http://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
+export ALL_PROXY="http://127.0.0.1:${DEEPSEEK_PROXY:-2005}"
 export NO_PROXY="localhost,127.0.0.1"
 
 # If no valid token is set, stay idle instead of crash-looping.

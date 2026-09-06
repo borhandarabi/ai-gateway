@@ -4472,9 +4472,6 @@ var knownServices = []knownServiceDef{
 	{Name: "zenfreeapi", Label: "ZenFreeAPI", ListenPortEnv: "ZENFREEAPI_PORT", ListenPortDef: 3008,
 		ProxyPortEnv: "ZENFREEAPI_PROXY_PORT", ProxyPortDef: 2008,
 		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
-	{Name: "zai-collect", Label: "zai-api collector traffic", ListenPortEnv: "", ListenPortDef: 0,
-		ProxyPortEnv: "ZAI_COLLECTOR_PROXY_PORT", ProxyPortDef: 2007,
-		IsAIProvider: false},
 	{Name: "flaresolverr", Label: "FlareSolverr", ListenPortEnv: "FLARESOLVERR_PORT", ListenPortDef: 8191,
 		ProxyPortEnv: "FLARESOLVERR_PROXY_PORT", ProxyPortDef: 8190,
 		IsAIProvider: false},
@@ -4530,7 +4527,7 @@ func heuristicSecretField(envKey string) bool {
 // Upstream sources:
 //   - zenfreeapi  : github.com/izaart95-jpg/ZenFreeAPI        (src/*.rs)
 //   - mimo        : github.com/hooshidev3/mimo-ai-proxy       (os.Getenv)
-//   - zai         : github.com/borhandarabi/GLM-Free-API      (main.go loadConfig)
+//   - zai         : github.com/izaart95-jpg/GLM-Free-API      (main.go loadConfig)
 //   - kimi        : github.com/izaart95-jpg/KimiFreeAPI       (main.go envOrDefault)
 //   - deepseek    : github.com/izaart95-jpg/DeepSeekFreeAPI   (main.go envOr)
 //   - grok2api    : config.yaml generated in its s6 run script (server/auth sections)
@@ -4538,9 +4535,12 @@ func heuristicSecretField(envKey string) bool {
 //   - flaresolverr: github.com/Rorqualx/flaresolverr-go        (internal/config)
 var serviceDefaultEnvs = map[string]map[string]string{
 	"zenfreeapi": {
-		"OPENCODE_ZEN_BASE": "https://opencode.ai/zen/v1",
-		"OPENCODE_API_KEY":  "public",
-		"OPENCODE_CLIENT":   "cli",
+		"OPENCODE_ZEN_BASE":	"https://opencode.ai/zen/v1",
+		"OPENCODE_API_KEY":  	"public",
+		"OPENCODE_CLIENT":   	"cli",
+		"OPENCODE_USER_AGENT":  "opencode/0.0.0",
+		"ZENFREEAPI_PORT":   	"3008",
+		"ZEN_STATE_DIR":   		"/data/zenfreeapi",
 	},
 	"mimo": {
 		"CORS_ORIGIN":        "*",
@@ -4550,21 +4550,34 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"XIAOMI_CHATBOT_PHS": "", // comma-separated Xiaomi chatbot PH cookies
 	},
 	"zai": {
-		"ZAI_AUTH_TOKEN":   "Waguri", // upstream AUTH_TOKEN default
-		"ZAI_TIMEOUT":      "300000", // ms, upstream TIMEOUT default
-		"ZAI_AGENT_MODE":   "true",
-		"ZAI_LOG_LEVEL":    "info", // upstream default is debug; image runs info
-		"ZAI_LOG_FORMAT":   "text",
-		"ZAI_AUTO_COLLECT": "false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
+		"ZAI_TOKEN":   					"", // Hardcoded Z.AI JWT — skips guest initialization
+		"ZAI_AUTH_TOKEN":   			"Waguri", // upstream AUTH_TOKEN default
+		"ZAI_TIMEOUT":      			"300000", // ms, upstream TIMEOUT default
+		"ZAI_AGENT_MODE":   			"true",
+		"ZAI_AGENT_MODE_VARIANT":   	"modern", // Shim variant override (modern/legacy; takes precedence over AGENT_MODE's implicit variant)
+		"ZAI_LOG_LEVEL":    			"info", // upstream default is debug; image runs info
+		"ZAI_LOG_FORMAT":   			"text",
+		"ZAI_UPSTREAM_MIN_INTERVAL_MS": "200",
+		"ZAI_SESSION_ACQUIRE_TIMEOUT":  "10",
+		"ZAI_SESSION_POOL_SIZE":   		"5", // Standing batch of ready chat sessions
+		"ZAI_SYNC_MODE":   				"false", // Legacy synchronous session flow (no pre-warmed pool)
+		"ZAI_STREAM_HOLDBACK":   		"24", // Runes held back at a live stream's tail to absorb Z.AI edit_content backtracks before they reach the client (0 disables; issue #23)
+		"ZAI_AUTO_COLLECT": 			"false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
 	},
 	"kimi": {
 		"KIMI_ACCESS_TOKEN": "",       // empty = service stays down/idle until a real token is set
 		"KIMI_AUTH_KEY":     "Waguri", // upstream AUTH_KEY default
 		"KIMI_DEBUG":        "",
+		"KIMI_AGENT_MODE":   "true",
+		"KIMI_REGION":       "global",
 	},
 	"deepseek": {
-		"DEEPSEEK_TOKEN": "",           // required for the proxy to serve requests
-		"PROXY_API_KEY":  "Waguri-san", // upstream default client key
+		"DEEPSEEK_TOKEN": 					"",           // required for the proxy to serve requests
+		"DEEPSEEK_PROXY_API_KEY":  			"Waguri", // upstream default client key
+		"DEEPSEEK_AGENT_MODE":  			"true",
+		"DEEPSEEK_SYNC_MODE":  				"false",
+		"DEEPSEEK_SESSION_POOL_SIZE":  		"5",
+		"DEEPSEEK_SESSION_ACQUIRE_TIMEOUT": "10",
 	},
 	"grok2api": {
 		"GROK2API_KEY":    "", // bootstrap encryption key; random if left empty
@@ -8444,7 +8457,7 @@ func looksLikeYAML(b []byte) bool {
 	return strings.Contains(s, "\nproxies:") || strings.HasPrefix(s, "proxies:")
 }
 
-var subURISchemes = []string{"vmess", "vless", "trojan", "ss", "hysteria2", "hy2", "http", "https", "socks5", "socks5h"}
+var subURISchemes = []string{"vmess", "vless", "trojan", "ss", "hysteria2", "hy2", "http", "https", "socks5", "http"}
 var reIPv4 = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 
 // unwrapBase64IfWrapped: اگر کل محتوا از قبل شبیه JSON/YAML/خط URI نباشد، چند
@@ -8880,7 +8893,7 @@ func parseSubscriptionLine(line string) (map[string]interface{}, error) {
 	case strings.HasPrefix(line, "hysteria2://"), strings.HasPrefix(line, "hy2://"):
 		return parseHysteria2URI(line)
 	case strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"),
-		strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "socks5h://"):
+		strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "http://"):
 		return parseSimpleProxyURI(line)
 	default:
 		if host, port, user, pass, ok := parsePlainHostPortLine(line); ok {
@@ -9167,7 +9180,7 @@ func parseHysteria2URI(line string) (map[string]interface{}, error) {
 	return out, nil
 }
 
-// --- http:// https:// socks5:// socks5h://   scheme://[user:pass@]host:port[#tag] ---
+// --- http:// https:// socks5:// http://   scheme://[user:pass@]host:port[#tag] ---
 func parseSimpleProxyURI(line string) (map[string]interface{}, error) {
 	u, uerr := url.Parse(line)
 	if uerr != nil {
@@ -9206,7 +9219,7 @@ func parseSimpleProxyURI(line string) (map[string]interface{}, error) {
 			}
 		}
 		return out, nil
-	case "socks5", "socks5h":
+	case "socks5", "http":
 		return map[string]interface{}{
 			"type": "socks", "tag": tag, "server": host, "server_port": port, "version": "5",
 			"username": username, "password": password,

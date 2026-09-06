@@ -56,7 +56,6 @@
         "ZAI_LOG_LEVEL": { "defaultValue": "info", "isOptional": false, "description": "Z.ai log level." },
         "ZAI_LOG_FORMAT": { "defaultValue": "text", "isOptional": false, "description": "Z.ai log format." },
         "ZAI_PROXY_PORT": { "defaultValue": "2001", "isOptional": false, "description": "Z.ai outbound proxy port." },
-        "ZAI_COLLECTOR_PROXY_PORT": { "defaultValue": "2007", "isOptional": false, "description": "Z.ai token collector proxy port." },
         "GROK2API_PORT": { "defaultValue": "3004", "isOptional": false, "description": "Grok2API HTTP port." },
         "GROK2API_KEY": { "defaultValue": "", "isOptional": true, "description": "Optional Grok2API bootstrap encryption key." },
         "GROK2API_SECRET": { "defaultValue": "", "isOptional": true, "description": "Optional Grok2API bootstrap JWT secret." },

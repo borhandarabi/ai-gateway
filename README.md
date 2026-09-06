@@ -88,7 +88,7 @@ docker compose logs -f
 # Manual docker build with required build-contexts:
 # docker buildx build \
 #   --build-context deepseek_src=https://github.com/izaart95-jpg/DeepSeekFreeAPI.git \
-#   --build-context zai_src=https://github.com/borhandarabi/GLM-Free-API.git \
+#   --build-context zai_src=https://github.com/izaart95-jpg/GLM-Free-API.git \
 #   -t ghcr.io/borhandarabi/ai-gateway:latest \
 #   --push \
 #   .

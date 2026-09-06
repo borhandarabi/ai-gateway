@@ -4,12 +4,15 @@ exec 2>&1
 cd /opt/kimi
 export PORT="${KIMI_PORT:-3002}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
-# export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-''}"
+export KIMI_ACCESS_TOKEN="${KIMI_ACCESS_TOKEN:-}"
 export KIMI_AUTH_KEY="${KIMI_AUTH_KEY:-Waguri}"
+export KIMI_DEBUG="${KIMI_DEBUG:-}"
+export AGENT_MODE="${KIMI_AGENT_MODE:-true}"
+export KIMI_REGION="${KIMI_REGION:-global}"
 
-export HTTP_PROXY="socks5h://127.0.0.1:${KIMI_PROXY:-2002}"
-export HTTPS_PROXY="socks5h://127.0.0.1:${KIMI_PROXY:-2002}"
-export ALL_PROXY="socks5h://127.0.0.1:${KIMI_PROXY:-2002}"
+export HTTP_PROXY="http://127.0.0.1:${KIMI_PROXY:-2002}"
+export HTTPS_PROXY="http://127.0.0.1:${KIMI_PROXY:-2002}"
+export ALL_PROXY="http://127.0.0.1:${KIMI_PROXY:-2002}"
 export NO_PROXY="localhost,127.0.0.1"
 
 # If no valid token is set, stay idle instead of crash-looping.

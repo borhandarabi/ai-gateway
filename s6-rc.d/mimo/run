@@ -19,9 +19,9 @@ export XIAOMI_CHATBOT_PHS="${XIAOMI_CHATBOT_PHS}"
 export API_KEY="${MIMO_API_KEY:-}"
 
 
-export HTTP_PROXY="socks5h://127.0.0.1:${MIMO_PROXY:-2003}"
-export HTTPS_PROXY="socks5h://127.0.0.1:${MIMO_PROXY:-2003}"
-export ALL_PROXY="socks5h://127.0.0.1:${MIMO_PROXY:-2003}"
+export HTTP_PROXY="http://127.0.0.1:${MIMO_PROXY:-2003}"
+export HTTPS_PROXY="http://127.0.0.1:${MIMO_PROXY:-2003}"
+export ALL_PROXY="http://127.0.0.1:${MIMO_PROXY:-2003}"
 export NO_PROXY="localhost,127.0.0.1"
 
 

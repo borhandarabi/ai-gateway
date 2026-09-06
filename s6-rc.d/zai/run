@@ -6,31 +6,23 @@ export PORT="${ZAI_PORT:-3001}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export TIMEOUT="${ZAI_TIMEOUT:-300000}"
 export AUTH_TOKEN="${ZAI_AUTH_TOKEN:-Waguri}"
+export ZAI_TOKEN="${ZAI_TOKEN:-}"
 export AGENT_MODE="${ZAI_AGENT_MODE:-true}"
+export AGENT_MODE_VARIANT="${ZAI_AGENT_MODE_VARIANT:-modern}"
+export STREAM_HOLDBACK="${ZAI_STREAM_HOLDBACK:-24}"
 export LOG_LEVEL="${ZAI_LOG_LEVEL:-info}"
+export SYNC_MODE="${ZAI_SYNC_MODE:-false}"
+export SESSION_POOL_SIZE="${ZAI_SESSION_POOL_SIZE:-5}"
+export UPSTREAM_MIN_INTERVAL_MS="${ZAI_UPSTREAM_MIN_INTERVAL_MS:-200}"
+export SESSION_ACQUIRE_TIMEOUT="${ZAI_SESSION_ACQUIRE_TIMEOUT:-10}"
 export LOG_FORMAT="${ZAI_LOG_FORMAT:-text}"
 
 
-export PROXY_SERVER_URL="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
-export PROXY_COLLECTOR_URL="http://127.0.0.1:${ZAI_COLLECTOR_PROXY_PORT:-2007}"
+export HTTP_PROXY="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
+export HTTPS_PROXY="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
+export ALL_PROXY="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
+export NO_PROXY="localhost,127.0.0.1"
 
-# Token bootstrap. `zai-api collect` drives a real headless Chromium via
-# Playwright -- hundreds of MB of RAM for minutes. On a 1GB container that
-# can OOM-kill neighbours, so it only runs when explicitly enabled with
-# ZAI_AUTO_COLLECT=true. Without tokens the server still boots; requests
-# just fail until tokens exist (collect from a bigger machine and mount
-# tokens.sqlite, or flip ZAI_AUTO_COLLECT and restart).
-if [ ! -f /data/zai/tokens.sqlite ]; then
-    if [ "${ZAI_AUTO_COLLECT:-false}" = "true" ] || [ "${ZAI_AUTO_COLLECT:-false}" = "1" ]; then
-        echo "[zai] No tokens.sqlite found; auto-collect enabled, generating tokens (Chromium)..."
-        # Not exec: we must copy the produced DB before handing over.
-        ./zai-api collect --tokens 750 --batch 1 --no-tui --parallel 1 --db-path="/data/zai/tokens.sqlite"
-    else
-        echo "[zai] No tokens.sqlite found and ZAI_AUTO_COLLECT != true."
-        echo "[zai] Starting WITHOUT tokens; set ZAI_AUTO_COLLECT=true (restart needed) or provide /data/zai/tokens.sqlite."
-    fi
-fi
+./token-collector collect --tokens 850 --batch 5 --no-tui --block-trackers --parallel 2
 
-# AUTH_TOKEN defaults to the upstream "Waguri" placeholder if unset -- override
-# this in production, do not rely on the default.
-exec ./zai-api --agent-mode --db-path="/data/zai/tokens.sqlite"
+exec ./zai-api

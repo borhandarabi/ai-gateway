@@ -104,7 +104,7 @@ Repo: https://github.com/hooshidev3/mimo-ai-proxy.git#main (os.Getenv)
 | AGENT_MODEL | — | not seeded |
 
 ### 4.3 zai / GLM-Free-API (Go)
-Repo: https://github.com/borhandarabi/GLM-Free-API.git#main (loadConfig in main.go ~line 95)
+Repo: https://github.com/izaart95-jpg/GLM-Free-API.git#main (loadConfig in main.go ~line 95)
 | Upstream key | Default | Notes |
 |---|---|---|
 | ⭐ AUTH_TOKEN (bundle ZAI_AUTH_TOKEN) | Waguri | client auth |
@@ -115,7 +115,7 @@ Repo: https://github.com/borhandarabi/GLM-Free-API.git#main (loadConfig in main.
 | ⭐ ZAI_AUTO_COLLECT | false | BUNDLE-only gate, not upstream |
 | PORT / HOST | — | derived |
 | ZAI_TOKEN | "" | upstream server token slot, not seeded |
-| PROXY_SERVER_URL / PROXY_COLLECTOR_URL / PROXY | — | run script derives from ZAI_PROXY_PORT(2001)/ZAI_COLLECTOR_PROXY_PORT(2007) |
+| PROXY_SERVER_URL / PROXY_COLLECTOR_URL / PROXY | — | run script derives from ZAI_PROXY_PORT(2001) |
 Important: `playwright.go` here is a STUB (no browser at server runtime). Only the `collect`
 subcommand (`captcha.go`, builds as token-collector, flags --tokens --batch --parallel
 --no-tui --headed) drives real Chromium. README slogan: "Pure HTTP".
@@ -166,7 +166,7 @@ Repo: https://github.com/XxxXTeam/Qwen2API_Go.git#main (internal/config/config.g
 | SEARCH_INFO_MODE / DEBUG_MODE / ENABLE_FILE_LOG / LOG_DIR / MAX_LOG_FILE_SIZE / MAX_LOG_FILES | various | not seeded |
 | QWEN_CHAT_PROXY_URL | https://chat.qwen.ai | not seeded |
 | LISTEN_ADDRESS / SERVICE_PORT | 0.0.0.0 / 3000 | derived (HOST←BIND_ADDR, PORT←QWEN2API_PORT) |
-| PROXY_URL | — | run script: socks5h://127.0.0.1:${QWEN2API_PROXY_PORT:-2006} |
+| PROXY_URL | — | run script: http://127.0.0.1:${QWEN2API_PROXY_PORT:-2006} |
 | BROWSER_AUTH_ENABLED(true)/BROWSER_EXECUTABLE_PATH/CHAT_CLEANUP_MODE(0)/PROMPT_OVERRIDES_JSON/REDIS_URL | — | not seeded |
 
 ### 4.8 flaresolverr-go
@@ -230,7 +230,7 @@ NOTE: "FLARESOLVERR_CAPTCHA_SOLVER" belongs to the OLD Python port — the Go po
 
 ```bash
 cd "$LOCALAPPDATA/Temp/upstream"
-for r in hooshidev3/mimo-ai-proxy borhandarabi/GLM-Free-API izaart95-jpg/KimiFreeAPI \
+for r in hooshidev3/mimo-ai-proxy izaart95-jpg/GLM-Free-API izaart95-jpg/KimiFreeAPI \
          izaart95-jpg/DeepSeekFreeAPI XxxXTeam/Qwen2API_Go Rorqualx/flaresolverr-go \
          izaart95-jpg/ZenFreeAPI; do git clone -q --depth 1 "https://github.com/$r.git"; done
 # env extraction shortcut (Go services):
