@@ -4535,12 +4535,12 @@ func heuristicSecretField(envKey string) bool {
 //   - flaresolverr: github.com/Rorqualx/flaresolverr-go        (internal/config)
 var serviceDefaultEnvs = map[string]map[string]string{
 	"zenfreeapi": {
-		"OPENCODE_ZEN_BASE":	"https://opencode.ai/zen/v1",
-		"OPENCODE_API_KEY":  	"public",
-		"OPENCODE_CLIENT":   	"cli",
-		"OPENCODE_USER_AGENT":  "opencode/0.0.0",
-		"ZENFREEAPI_PORT":   	"3008",
-		"ZEN_STATE_DIR":   		"/data/zenfreeapi",
+		"OPENCODE_ZEN_BASE":   "https://opencode.ai/zen/v1",
+		"OPENCODE_API_KEY":    "public",
+		"OPENCODE_CLIENT":     "cli",
+		"OPENCODE_USER_AGENT": "opencode/0.0.0",
+		"ZENFREEAPI_PORT":     "3008",
+		"ZEN_STATE_DIR":       "/data/zenfreeapi",
 	},
 	"mimo": {
 		"CORS_ORIGIN":        "*",
@@ -4550,19 +4550,19 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"XIAOMI_CHATBOT_PHS": "", // comma-separated Xiaomi chatbot PH cookies
 	},
 	"zai": {
-		"ZAI_TOKEN":   					"", // Hardcoded Z.AI JWT — skips guest initialization
-		"ZAI_AUTH_TOKEN":   			"Waguri", // upstream AUTH_TOKEN default
-		"ZAI_TIMEOUT":      			"300000", // ms, upstream TIMEOUT default
-		"ZAI_AGENT_MODE":   			"true",
-		"ZAI_AGENT_MODE_VARIANT":   	"modern", // Shim variant override (modern/legacy; takes precedence over AGENT_MODE's implicit variant)
-		"ZAI_LOG_LEVEL":    			"info", // upstream default is debug; image runs info
-		"ZAI_LOG_FORMAT":   			"text",
+		"ZAI_TOKEN":                    "",       // Hardcoded Z.AI JWT — skips guest initialization
+		"ZAI_AUTH_TOKEN":               "Waguri", // upstream AUTH_TOKEN default
+		"ZAI_TIMEOUT":                  "300000", // ms, upstream TIMEOUT default
+		"ZAI_AGENT_MODE":               "true",
+		"ZAI_AGENT_MODE_VARIANT":       "modern", // Shim variant override (modern/legacy; takes precedence over AGENT_MODE's implicit variant)
+		"ZAI_LOG_LEVEL":                "info",   // upstream default is debug; image runs info
+		"ZAI_LOG_FORMAT":               "text",
 		"ZAI_UPSTREAM_MIN_INTERVAL_MS": "200",
 		"ZAI_SESSION_ACQUIRE_TIMEOUT":  "10",
-		"ZAI_SESSION_POOL_SIZE":   		"5", // Standing batch of ready chat sessions
-		"ZAI_SYNC_MODE":   				"false", // Legacy synchronous session flow (no pre-warmed pool)
-		"ZAI_STREAM_HOLDBACK":   		"24", // Runes held back at a live stream's tail to absorb Z.AI edit_content backtracks before they reach the client (0 disables; issue #23)
-		"ZAI_AUTO_COLLECT": 			"false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
+		"ZAI_SESSION_POOL_SIZE":        "5",     // Standing batch of ready chat sessions
+		"ZAI_SYNC_MODE":                "false", // Legacy synchronous session flow (no pre-warmed pool)
+		"ZAI_STREAM_HOLDBACK":          "24",    // Runes held back at a live stream's tail to absorb Z.AI edit_content backtracks before they reach the client (0 disables; issue #23)
+		"ZAI_AUTO_COLLECT":             "false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
 	},
 	"kimi": {
 		"KIMI_ACCESS_TOKEN": "",       // empty = service stays down/idle until a real token is set
@@ -4572,11 +4572,11 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"KIMI_REGION":       "global",
 	},
 	"deepseek": {
-		"DEEPSEEK_TOKEN": 					"",           // required for the proxy to serve requests
-		"DEEPSEEK_PROXY_API_KEY":  			"Waguri", // upstream default client key
-		"DEEPSEEK_AGENT_MODE":  			"true",
-		"DEEPSEEK_SYNC_MODE":  				"false",
-		"DEEPSEEK_SESSION_POOL_SIZE":  		"5",
+		"DEEPSEEK_TOKEN":                   "",       // required for the proxy to serve requests
+		"DEEPSEEK_PROXY_API_KEY":           "Waguri", // upstream default client key
+		"DEEPSEEK_AGENT_MODE":              "true",
+		"DEEPSEEK_SYNC_MODE":               "false",
+		"DEEPSEEK_SESSION_POOL_SIZE":       "5",
 		"DEEPSEEK_SESSION_ACQUIRE_TIMEOUT": "10",
 	},
 	"grok2api": {
@@ -4645,7 +4645,11 @@ func normalizeServiceEnv(env map[string]string) (map[string]string, error) {
 	}
 	normalized := make(map[string]string, len(env))
 	for key, value := range env {
-		key = strings.TrimSpace(key)
+		// Older dashboard/state data may contain Markdown-style escaped
+		// underscores (for example, ZAI\_AGENT\_MODE).  They are not part of
+		// the actual POSIX variable name and make `export` fail in the run
+		// script, so canonicalize them before validating and storing the key.
+		key = strings.ReplaceAll(strings.TrimSpace(key), `\_`, "_")
 		if !serviceEnvKeyRe.MatchString(key) {
 			return nil, fmt.Errorf("invalid environment key %q", key)
 		}
@@ -4789,6 +4793,34 @@ func readStateOrDefault() AppState {
 			ProxyPort:  getEnvIntDefault("ZENFREEAPI_PROXY_PORT", 2008),
 		})
 		_ = writeState(s)
+	}
+
+	// Canonicalize environment keys from older state files before applying
+	// defaults. This also repairs escaped underscores left by older dashboard
+	// versions, so subsequent run-script rendering never emits an invalid
+	// `export` statement.
+	if len(s.Services) > 0 {
+		stateEnvChanged := false
+		for i := range s.Services {
+			normalized, err := normalizeServiceEnv(s.Services[i].Env)
+			if err != nil {
+				continue
+			}
+			if len(normalized) != len(s.Services[i].Env) {
+				stateEnvChanged = true
+			} else {
+				for key, value := range normalized {
+					if current, ok := s.Services[i].Env[key]; !ok || current != value {
+						stateEnvChanged = true
+						break
+					}
+				}
+			}
+			s.Services[i].Env = normalized
+		}
+		if stateEnvChanged {
+			_ = writeState(s)
+		}
 	}
 
 	// Seed every default service with its upstream-documented environment
@@ -7713,15 +7745,15 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// into a request storm against OmniRoute.
 	reachable, probeReason := probeOmniRoute()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"configured":        getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
-		"available":         reachable,
+		"configured":         getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
+		"available":          reachable,
 		"unavailable_reason": probeReason,
-		"base_url":          getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
-		"internal_base_url": getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
-		"links":             links,
-		"suggested_keys":    suggestedKeys,
-		"preferred_types":   preferredTypes,
-		"known_ai_services": knownAIServiceNames(),
+		"base_url":           getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
+		"internal_base_url":  getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
+		"links":              links,
+		"suggested_keys":     suggestedKeys,
+		"preferred_types":    preferredTypes,
+		"known_ai_services":  knownAIServiceNames(),
 	})
 }
 
@@ -7729,10 +7761,10 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 // services هر چند ثانیه دوباره رندر می‌شود و بدون کش، هر رندر یک درخواست
 // واقعی به OmniRoute می‌فرستاد.
 var (
-	omniRouteProbeMu       sync.Mutex
-	omniRouteProbeOK       bool
-	omniRouteProbeReason   string
-	omniRouteProbeAt       time.Time
+	omniRouteProbeMu     sync.Mutex
+	omniRouteProbeOK     bool
+	omniRouteProbeReason string
+	omniRouteProbeAt     time.Time
 )
 
 func probeOmniRoute() (bool, string) {
@@ -8197,12 +8229,12 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 // تگ selector مرتبط، و ارجاع‌های route rule را هماهنگ به‌روزرسانی می‌کند.
 func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OldName              string            `json:"old_name"`
-		NewName              string            `json:"new_name"`
-		NewListenPort        int               `json:"new_listen_port"`
-		NewProxyPort         int               `json:"new_proxy_port,omitempty"`
-		PreferredOmniRoute   string            `json:"preferred_omniroute_type,omitempty"`
-		Env                  map[string]string `json:"env,omitempty"`
+		OldName            string            `json:"old_name"`
+		NewName            string            `json:"new_name"`
+		NewListenPort      int               `json:"new_listen_port"`
+		NewProxyPort       int               `json:"new_proxy_port,omitempty"`
+		PreferredOmniRoute string            `json:"preferred_omniroute_type,omitempty"`
+		Env                map[string]string `json:"env,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
@@ -11612,6 +11644,10 @@ func applyServiceEnvToRun(name string, env map[string]string) error {
 	if !isValidS6ServiceName(name) {
 		return fmt.Errorf("invalid s6 service name %q", name)
 	}
+	normalizedEnv, err := normalizeServiceEnv(env)
+	if err != nil {
+		return err
+	}
 	sourcePath := filepath.Join(s6SourceDir, name, "run")
 	script, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -11621,7 +11657,7 @@ func applyServiceEnvToRun(name string, env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	updated := []byte(renderServiceRunEnv(string(script), env))
+	updated := []byte(renderServiceRunEnv(string(script), normalizedEnv))
 	if err := writeServiceRunScript(sourcePath, updated, info.Mode()); err != nil {
 		return fmt.Errorf("cannot update %s: %w", sourcePath, err)
 	}
@@ -11632,12 +11668,28 @@ func applyServiceEnvToRun(name string, env map[string]string) error {
 	livePath := filepath.Join(s6ServiceDir, name, "run")
 	if liveInfo, statErr := os.Stat(livePath); statErr == nil {
 		if liveScript, readErr := os.ReadFile(livePath); readErr == nil {
-			liveUpdated := []byte(renderServiceRunEnv(string(liveScript), env))
+			liveUpdated := []byte(renderServiceRunEnv(string(liveScript), normalizedEnv))
 			if err := writeServiceRunScript(livePath, liveUpdated, liveInfo.Mode()); err != nil {
 				return fmt.Errorf("cannot update %s: %w", livePath, err)
 			}
 		}
 	}
+	return nil
+}
+
+// applyPersistedServiceEnv restores the dashboard-owned environment block
+// from state.json before s6 starts/restarts a service. s6 may recreate or
+// replace the live run-script copy, so mutating the script only at save time
+// is not sufficient for a later service restart.
+func applyPersistedServiceEnv(name string) error {
+	state := readStateOrDefault()
+	for _, svc := range state.Services {
+		if svc.Name == name {
+			return applyServiceEnvToRun(name, svc.Env)
+		}
+	}
+	// Logger/pipeline companions are controllable s6 services too, but they
+	// do not have a dashboard-owned env map. Leave those scripts untouched.
 	return nil
 }
 
@@ -11648,6 +11700,10 @@ func restartS6ServiceIfWanted(name string) bool {
 	}
 	up, wantedUp, _, _, ok := s6Status(svPath)
 	if !ok || (!up && !wantedUp) {
+		return false
+	}
+	if err := applyPersistedServiceEnv(name); err != nil {
+		log.Printf("service env: failed to restore %s before restart: %v", name, err)
 		return false
 	}
 	if _, err := exec.Command("/command/s6-svc", "-r", svPath).CombinedOutput(); err != nil {
@@ -11874,6 +11930,14 @@ func controlS6ServiceHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "action must be start, stop, or restart"})
 		return
+	}
+	if action == "start" || action == "restart" {
+		if err := applyPersistedServiceEnv(name); err != nil {
+			jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{
+				"error": fmt.Sprintf("failed to restore environment for %s: %v", name, err),
+			})
+			return
+		}
 	}
 
 	out, err := exec.Command("/command/s6-svc", flag, svPath).CombinedOutput()
