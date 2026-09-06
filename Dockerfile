@@ -56,7 +56,6 @@ FROM golang:1.26-alpine AS kimi-builder
 WORKDIR /src
 COPY --from=kimi_src . .
 RUN apk add --no-cache git gcc musl-dev
-RUN go mod init kimi-api
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
 RUN go mod tidy
 # main.go is the actual service entry point.
