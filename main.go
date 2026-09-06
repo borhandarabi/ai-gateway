@@ -4649,7 +4649,18 @@ func normalizeServiceEnv(env map[string]string) (map[string]string, error) {
 		// underscores (for example, ZAI\_AGENT\_MODE).  They are not part of
 		// the actual POSIX variable name and make `export` fail in the run
 		// script, so canonicalize them before validating and storing the key.
-		key = strings.ReplaceAll(strings.TrimSpace(key), `\_`, "_")
+		rawKey := strings.TrimSpace(key)
+		// Also repair a legacy representation where the whole shell
+		// assignment was accidentally stored as the map key, e.g.
+		// ZAI\_AGENT\_MODE='true'. The current API never emits this shape.
+		if equals := strings.IndexByte(rawKey, '='); equals >= 0 {
+			embeddedValue := strings.TrimSpace(rawKey[equals+1:])
+			rawKey = strings.TrimSpace(rawKey[:equals])
+			if value == "" {
+				value = strings.Trim(embeddedValue, "'\"")
+			}
+		}
+		key = strings.ReplaceAll(rawKey, `\_`, "_")
 		if !serviceEnvKeyRe.MatchString(key) {
 			return nil, fmt.Errorf("invalid environment key %q", key)
 		}
@@ -4660,7 +4671,13 @@ func normalizeServiceEnv(env map[string]string) (map[string]string, error) {
 			return nil, fmt.Errorf("environment value for %q is too long", key)
 		}
 		if _, exists := normalized[key]; exists {
-			return nil, fmt.Errorf("duplicate environment key %q", key)
+			// A legacy state file can contain both KEY and KEY-with-escaped-
+			// underscores. Prefer the canonical key deterministically, rather
+			// than leaving the malformed legacy key in the generated script.
+			if rawKey == key {
+				normalized[key] = value
+			}
+			continue
 		}
 		normalized[key] = value
 	}
@@ -11566,6 +11583,20 @@ const (
 )
 
 func renderServiceRunEnv(script string, env map[string]string) string {
+	// Remove malformed legacy exports written by older builds before adding
+	// the managed block. Without this cleanup, a stale run script can fail
+	// before the new normalized environment is reached.
+	legacyLines := strings.SplitAfter(script, "\n")
+	cleanedLines := legacyLines[:0]
+	for _, line := range legacyLines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "export ") && strings.Contains(trimmed, `\_`) {
+			continue
+		}
+		cleanedLines = append(cleanedLines, line)
+	}
+	script = strings.Join(cleanedLines, "")
+
 	// Remove the block previously managed by the dashboard, while leaving all
 	// user-authored lines in the s6 run script untouched.
 	if begin := strings.Index(script, serviceEnvBegin); begin >= 0 {
