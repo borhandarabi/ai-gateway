@@ -8893,7 +8893,8 @@ func parseSubscriptionLine(line string) (map[string]interface{}, error) {
 	case strings.HasPrefix(line, "hysteria2://"), strings.HasPrefix(line, "hy2://"):
 		return parseHysteria2URI(line)
 	case strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"),
-		strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "http://"):
+		strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "socks://"),
+		strings.HasPrefix(line, "socks5h://"):
 		return parseSimpleProxyURI(line)
 	default:
 		if host, port, user, pass, ok := parsePlainHostPortLine(line); ok {
@@ -9180,7 +9181,7 @@ func parseHysteria2URI(line string) (map[string]interface{}, error) {
 	return out, nil
 }
 
-// --- http:// https:// socks5:// http://   scheme://[user:pass@]host:port[#tag] ---
+// --- http:// https:// socks5:// socks:// socks5h://   scheme://[user:pass@]host:port[#tag] ---
 func parseSimpleProxyURI(line string) (map[string]interface{}, error) {
 	u, uerr := url.Parse(line)
 	if uerr != nil {
@@ -9219,7 +9220,7 @@ func parseSimpleProxyURI(line string) (map[string]interface{}, error) {
 			}
 		}
 		return out, nil
-	case "socks5", "http":
+	case "socks5", "socks", "socks5h":
 		return map[string]interface{}{
 			"type": "socks", "tag": tag, "server": host, "server_port": port, "version": "5",
 			"username": username, "password": password,
