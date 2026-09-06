@@ -44,7 +44,7 @@ FROM golang:1.26-alpine AS zai-builder
 WORKDIR /src
 COPY --from=zai_src . .
 RUN apk add --no-cache git gcc musl-dev
-# RUN go mod init zai-api
+RUN go mod init zai-api
 # go.mod is pre-tidy as of writing; resolve real deps at build time.
 RUN go mod tidy
 # main.go is the actual service entry point.
