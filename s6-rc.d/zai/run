@@ -23,6 +23,6 @@ export HTTPS_PROXY="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
 export ALL_PROXY="http://127.0.0.1:${ZAI_PROXY_PORT:-2001}"
 export NO_PROXY="localhost,127.0.0.1"
 
-./token-collector collect --tokens 850 --batch 5 --no-tui --block-trackers --parallel 2
+./token-collector --tokens 850 --batch 5 --no-tui --block-trackers --parallel 2
 
 exec ./zai-api
