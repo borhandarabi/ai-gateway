@@ -8092,7 +8092,7 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known services, not %q", req.Name)})
 			return
 		}
-		if err := applyServiceEnvToRun(req.Name, configEnv); err != nil {
+		if _, err := applyServiceEnvToRun(req.Name, configEnv); err != nil {
 			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 			return
 		}
@@ -8291,7 +8291,7 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		// Run-script env only applies to real bundled services; a custom
 		// service has no run script and applyServiceEnvToRun would error.
 		if _, known := findKnownService(req.OldName); known {
-			if err := applyServiceEnvToRun(req.NewName, newEnv); err != nil {
+			if _, err := applyServiceEnvToRun(req.NewName, newEnv); err != nil {
 				log.Printf("edit_service: applying env to %q run script: %v", req.NewName, err)
 			}
 		}
@@ -8359,7 +8359,8 @@ func updateServiceEnvHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.Name)})
 		return
 	}
-	if err := applyServiceEnvToRun(req.Name, env); err != nil {
+	liveApplied, err := applyServiceEnvToRun(req.Name, env)
+	if err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
 	}
@@ -8372,12 +8373,25 @@ func updateServiceEnvHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save service environment: " + err.Error()})
 		return
 	}
-	restarted := restartS6ServiceIfWanted(req.Name)
+	// A bare `s6-svc -r` only helps when the live/compiled run script was
+	// actually patched above. For services whose live copy is an
+	// s6-rc-compile-generated log-pipeline wrapper (see
+	// s6LiveRunMatchesSource), that copy was deliberately left untouched --
+	// restarting it now would just restart the OLD environment, or worse,
+	// re-exec whatever was already there. Those need a full container
+	// restart, which regenerates the live tree from the freshly-patched
+	// source.
+	restarted := false
+	if liveApplied {
+		restarted = restartS6ServiceIfWanted(req.Name)
+	}
 	message := fmt.Sprintf("Environment for %q updated", req.Name)
 	if restarted {
 		message += "; service restarted"
+	} else if !liveApplied {
+		message += "; restart the container to apply it (this service streams its logs through an s6-rc pipeline, so it can't be live-patched safely)"
 	}
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": message, "restarted": restarted})
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"message": message, "restarted": restarted, "live_applied": liveApplied})
 }
 
 // ---------------------------------------------------------------------
@@ -11608,37 +11622,94 @@ func writeServiceRunScript(path string, data []byte, mode os.FileMode) error {
 	return atomicWriteFile(path, data, mode.Perm())
 }
 
-func applyServiceEnvToRun(name string, env map[string]string) error {
+// s6LiveRunMatchesSource reports whether the compiled/live run script at
+// $S6_SERVICE_DIR is provably the same kind of artifact as the checked-in
+// source script -- i.e. safe to text-patch with a bash "export KEY='value'"
+// block the way renderServiceRunEnv does.
+//
+// It is NOT safe for every service: for the producer half of an s6-rc log
+// pipeline (e.g. zai, whose stdout is piped into the sibling "zai-log"
+// service -- see each service's producer-for/consumer-for files),
+// s6-rc-compile replaces the live run file with an auto-generated execline
+// wrapper that redirects stdout into the logger's FIFO. That wrapper is NOT
+// a copy of our bash script, even though the source tree's run file is. If
+// we blindly inject our bash export block into it anyway, s6-supervise ends
+// up executing the corrupted file directly as execline, and execline's own
+// `export` utility -- whose syntax is space-separated `export NAME VALUE`,
+// not shell's `NAME=VALUE` -- rejects the first `=`/quote-containing token
+// with exactly:
+//
+//	export: fatal: invalid variable name: TOKEN='hhhhhh'
+//
+// We can't reliably enumerate "has a logger" from Go without re-deriving
+// s6-rc's own pipeline resolution, so instead we compare the first line of
+// the live file against the first line of the (already-patched-in-memory)
+// source: a plain longrun run script we generated always starts with the
+// same shebang line as its source counterpart. If they differ -- or the
+// live file is empty/unreadable as text -- we treat it as "not the same
+// artifact" and leave it untouched. The source copy is still updated, and
+// takes effect the next time the container boots and s6-rc-compile
+// regenerates the live tree from scratch; callers should ask for a full
+// container restart instead of a bare `s6-svc -r` in that case.
+func s6LiveRunMatchesSource(sourceScript, liveScript string) bool {
+	firstLine := func(s string) string {
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[:i]
+		}
+		return strings.TrimRight(s, "\r")
+	}
+	srcFirst := firstLine(sourceScript)
+	liveFirst := firstLine(liveScript)
+	if srcFirst == "" || liveFirst == "" {
+		return false
+	}
+	return srcFirst == liveFirst
+}
+
+// applyServiceEnvToRun writes the dashboard-managed env block into the
+// source run script and, when safe, into the live/compiled copy too. It
+// returns liveApplied=true only when the live copy was actually patched --
+// callers must not issue a bare service restart when it's false, since the
+// live copy still holds the OLD environment (or, for pipelined services,
+// an execline wrapper that must never be hand-patched at all); only a full
+// container restart regenerates it correctly from the freshly-patched
+// source.
+func applyServiceEnvToRun(name string, env map[string]string) (liveApplied bool, err error) {
 	if !isValidS6ServiceName(name) {
-		return fmt.Errorf("invalid s6 service name %q", name)
+		return false, fmt.Errorf("invalid s6 service name %q", name)
 	}
 	sourcePath := filepath.Join(s6SourceDir, name, "run")
 	script, err := os.ReadFile(sourcePath)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %w", sourcePath, err)
+		return false, fmt.Errorf("cannot read %s: %w", sourcePath, err)
 	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	updated := []byte(renderServiceRunEnv(string(script), env))
 	if err := writeServiceRunScript(sourcePath, updated, info.Mode()); err != nil {
-		return fmt.Errorf("cannot update %s: %w", sourcePath, err)
+		return false, fmt.Errorf("cannot update %s: %w", sourcePath, err)
 	}
 
 	// In a running container s6 may execute the compiled/live copy rather
-	// than the source tree. Update it too when available so a restart applies
-	// the new environment immediately; the source remains the persistent copy.
+	// than the source tree. Only patch it in place when it is provably the
+	// same kind of script as the source -- see s6LiveRunMatchesSource.
 	livePath := filepath.Join(s6ServiceDir, name, "run")
 	if liveInfo, statErr := os.Stat(livePath); statErr == nil {
 		if liveScript, readErr := os.ReadFile(livePath); readErr == nil {
-			liveUpdated := []byte(renderServiceRunEnv(string(liveScript), env))
-			if err := writeServiceRunScript(livePath, liveUpdated, liveInfo.Mode()); err != nil {
-				return fmt.Errorf("cannot update %s: %w", livePath, err)
+			if s6LiveRunMatchesSource(string(script), string(liveScript)) {
+				liveUpdated := []byte(renderServiceRunEnv(string(liveScript), env))
+				if err := writeServiceRunScript(livePath, liveUpdated, liveInfo.Mode()); err != nil {
+					return false, fmt.Errorf("cannot update %s: %w", livePath, err)
+				}
+				liveApplied = true
+			} else {
+				log.Printf("service env: live run for %q is not a plain copy of its source (likely an s6-rc log-pipeline wrapper) -- left untouched; a full container restart is needed to apply the new environment", name)
 			}
 		}
 	}
-	return nil
+	return liveApplied, nil
 }
 
 func restartS6ServiceIfWanted(name string) bool {
@@ -13146,7 +13217,7 @@ func main() {
 		if len(svc.Env) == 0 {
 			continue
 		}
-		if err := applyServiceEnvToRun(svc.Name, svc.Env); err != nil {
+		if _, err := applyServiceEnvToRun(svc.Name, svc.Env); err != nil {
 			log.Printf("startup: applying default env for %q: %v", svc.Name, err)
 		}
 	}
