@@ -3,7 +3,7 @@ set -e
 exec 2>&1
 mkdir -p "${ZEN_STATE_DIR:-/data/zenfreeapi}"
 
-export ZEN_LISTEN="${ZEN_LISTEN:-${BIND_ADDR:-0.0.0.0}:${ZENFREEAPI_PORT:-3008}}"
+export ZEN_LISTEN="${ZEN_LISTEN:-${BIND_ADDR:-0.0.0.0}:${PORT:-3008}}"
 export ZEN_STATE_DIR="${ZEN_STATE_DIR:-/data/zenfreeapi}"
 export OPENCODE_ZEN_BASE="${OPENCODE_ZEN_BASE:-https://opencode.ai/zen/v1}"
 export OPENCODE_API_KEY="${OPENCODE_API_KEY:-public}"

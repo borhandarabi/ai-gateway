@@ -2,7 +2,7 @@
 set -e
 exec 2>&1
 cd /opt/deepseek
-export PORT="${DEEPSEEK_PORT:-3005}"
+export PORT="${PORT:-3005}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export PROXY_API_KEY="${DEEPSEEK_PROXY_API_KEY:-'Waguri'}"
 export DEEPSEEK_TOKEN="${DEEPSEEK_TOKEN:-''}"

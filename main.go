@@ -2260,6 +2260,13 @@ const htmlContent = `<!DOCTYPE html>
     var tdProxy = tr.children[2];
     var tdAct = tr.children[5];
 
+    // Keep the editor in its own row. Controls inside the Public URL cell
+    // can recalculate the table width and push Save/Cancel out of view.
+    var existingEditor = tr.nextElementSibling;
+    if (existingEditor && (existingEditor.dataset.envEditorFor || existingEditor.dataset.omniEditorFor || existingEditor.dataset.serviceEditorFor)) {
+      existingEditor.remove();
+    }
+
     // Pull the full ServiceDef (env, preferred type) from the last load so
     // the edit form can prefill the endpoint-style selector and the env
     // editor with current values.
@@ -2307,7 +2314,6 @@ const htmlContent = `<!DOCTYPE html>
     epSelect.value = svcDef.preferred_omniroute_type || 'openai-compatible';
     epWrap.appendChild(epLabel);
     epWrap.appendChild(epSelect);
-    tdProxy.appendChild(epWrap);
 
     // Inline env editor rows (same key:value model as toggleServiceEnvEditor)
     var envRows = document.createElement('div');
@@ -2390,13 +2396,26 @@ const htmlContent = `<!DOCTYPE html>
     // The extended controls (endpoint style + env rows) need more room than
     // the Actions cell: host them in the Public URL cell — it re-renders on
     // the next refresh after save.
-    var tdHost = tr.children[3];
-    tdHost.innerHTML = '';
-    var hostTitle = document.createElement('div');
-    hostTitle.className = 'hint';
-    hostTitle.textContent = 'Editing "' + name + '" — environment variables:';
-    tdHost.appendChild(hostTitle);
-    tdHost.appendChild(envRows);
+    var editorRow = document.createElement('tr');
+    editorRow.dataset.serviceEditorFor = name;
+    var editorCell = document.createElement('td');
+    editorCell.colSpan = 7;
+    var editorBox = document.createElement('div');
+    editorBox.style.cssText = 'padding:12px 14px; background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius);';
+    var editorTitle = document.createElement('div');
+    editorTitle.style.cssText = 'font-weight:600;margin-bottom:8px;';
+    editorTitle.textContent = 'Editing "' + name + '"';
+    var editorHint = document.createElement('div');
+    editorHint.className = 'hint';
+    editorHint.style.marginBottom = '10px';
+    editorHint.textContent = 'Configure the public endpoint style and environment variables.';
+    editorBox.appendChild(editorTitle);
+    editorBox.appendChild(editorHint);
+    editorBox.appendChild(epWrap);
+    editorBox.appendChild(envRows);
+    editorCell.appendChild(editorBox);
+    editorRow.appendChild(editorCell);
+    tr.parentNode.insertBefore(editorRow, tr.nextSibling);
 
     nameInput.focus();
     nameInput.select();
@@ -8087,15 +8106,14 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 	// اگر config_env فرستاده شده، فقط برای سرویس‌های واقعاً شناخته‌شده (که یک
 	// s6-rc.d/<name>/run واقعی دارند) اعمالش کن -- برای یک نام دلخواه/سفارشی
 	// معنا ندارد (applyServiceEnvToRun هم به همین دلیل خودش خطا می‌دهد).
-	if len(configEnv) > 0 {
-		if _, known := findKnownService(req.Name); !known {
-			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known services, not %q", req.Name)})
-			return
-		}
-		if _, err := applyServiceEnvToRun(req.Name, configEnv); err != nil {
+	if _, known := findKnownService(req.Name); known {
+		if _, err := applyServiceEnvWithPort(req.Name, configEnv, req.ListenPort); err != nil {
 			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 			return
 		}
+	} else if len(configEnv) > 0 {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known services, not %q", req.Name)})
+		return
 	}
 
 	state.Services = append(state.Services, ServiceDef{
@@ -8109,7 +8127,7 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
 		return
 	}
-	if len(configEnv) > 0 {
+	if _, known := findKnownService(req.Name); known {
 		restartS6ServiceIfWanted(req.Name)
 	}
 
@@ -8287,19 +8305,23 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		Env:                    newEnv,
 		PreferredOmniRouteType: req.PreferredOmniRoute,
 	}
-	if req.Env != nil {
-		// Run-script env only applies to real bundled services; a custom
-		// service has no run script and applyServiceEnvToRun would error.
-		if _, known := findKnownService(req.OldName); known {
-			if _, err := applyServiceEnvToRun(req.NewName, newEnv); err != nil {
-				log.Printf("edit_service: applying env to %q run script: %v", req.NewName, err)
-			}
+	// The listener port is the service's canonical PORT. Apply it even when
+	// the request changed no custom environment variables.
+	liveApplied := false
+	if _, known := findKnownService(req.OldName); known {
+		var err error
+		liveApplied, err = applyServiceEnvWithPort(req.OldName, newEnv, req.NewListenPort)
+		if err != nil {
+			log.Printf("edit_service: applying env to %q run script: %v", req.OldName, err)
 		}
 	}
 
 	if err := writeState(state); err != nil {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
 		return
+	}
+	if liveApplied {
+		restartS6ServiceIfWanted(req.OldName)
 	}
 
 	var tmpl map[string]interface{}
@@ -8359,7 +8381,7 @@ func updateServiceEnvHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.Name)})
 		return
 	}
-	liveApplied, err := applyServiceEnvToRun(req.Name, env)
+	liveApplied, err := applyServiceEnvWithPort(req.Name, env, state.Services[serviceIndex].ListenPort)
 	if err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
@@ -11614,6 +11636,20 @@ func renderServiceRunEnv(script string, env map[string]string) string {
 	return script + block.String()
 }
 
+// applyServiceEnvWithPort keeps the service listener and the process PORT in
+// sync. PORT is derived from ServiceDef.ListenPort, so it always wins over a
+// manually supplied value in the dashboard environment editor.
+func applyServiceEnvWithPort(name string, env map[string]string, listenPort int) (bool, error) {
+	managed := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		managed[key] = value
+	}
+	if listenPort > 0 {
+		managed["PORT"] = strconv.Itoa(listenPort)
+	}
+	return applyServiceEnvToRun(name, managed)
+}
+
 func writeServiceRunScript(path string, data []byte, mode os.FileMode) error {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		// Preserve symlinks used by s6-overlay and write through to their target.
@@ -13210,14 +13246,14 @@ func main() {
 	// would show values that are never applied. Runs AFTER ensureDefaultFiles
 	// (below) so a fresh install — whose bootstrap just created state.json
 	// with the seeded envs — is covered on its very first boot.
-	// applyServiceEnvToRun writes a managed export block into both the
-	// source and live copies of each run script; empty/nil Env is skipped.
+	// applyServiceEnvWithPort writes a managed export block into both the
+	// source and live copies of each run script, including the canonical PORT.
 	ensureDefaultFiles()
 	for _, svc := range readStateOrDefault().Services {
-		if len(svc.Env) == 0 {
+		if _, known := findKnownService(svc.Name); !known {
 			continue
 		}
-		if _, err := applyServiceEnvToRun(svc.Name, svc.Env); err != nil {
+		if _, err := applyServiceEnvWithPort(svc.Name, svc.Env, svc.ListenPort); err != nil {
 			log.Printf("startup: applying default env for %q: %v", svc.Name, err)
 		}
 	}

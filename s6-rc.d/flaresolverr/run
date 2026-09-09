@@ -2,7 +2,7 @@
 set -e
 exec 2>&1
 export HOST="${BIND_ADDR:-0.0.0.0}"
-export PORT="${FLARESOLVERR_PORT:-8191}"
+export PORT="${PORT:-8191}"
 export LOG_LEVEL="${FLARESOLVERR_LOG_LEVEL:-info}"
 export LOG_HTML="${FLARESOLVERR_LOG_HTML:-false}"
 export HEADLESS="${FLARESOLVERR_HEADLESS:-true}"

@@ -16,7 +16,7 @@ if [ ! -f /data/grok2api/config.yaml ]; then
   SECRET="${GROK2API_SECRET:-$(head -c 32 /dev/urandom | base64)}"
   cat > /data/grok2api/config.yaml << EOF
 server:
-  listen: "${BIND_ADDR:-0.0.0.0}:${GROK2API_PORT:-3004}"
+  listen: "${BIND_ADDR:-0.0.0.0}:${PORT:-3004}"
   maxBodyBytes: 33554432
   readTimeout: 15m
   requestTimeout: 2h

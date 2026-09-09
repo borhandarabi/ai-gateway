@@ -2,7 +2,10 @@
 set -e
 exec 2>&1
 cd /opt/zai
-export PORT="${ZAI_PORT:-3001}"
+
+./token-collector --tokens 850 --batch 5 --no-tui --parallel 1
+
+export PORT="${PORT:-3001}"
 export HOST="${BIND_ADDR:-0.0.0.0}"
 export TIMEOUT="${ZAI_TIMEOUT:-300000}"
 export AUTH_TOKEN="${ZAI_AUTH_TOKEN:-Waguri}"
@@ -16,7 +19,5 @@ export SESSION_POOL_SIZE="${SESSION_POOL_SIZE:-5}"
 export UPSTREAM_MIN_INTERVAL_MS="${UPSTREAM_MIN_INTERVAL_MS:-200}"
 export SESSION_ACQUIRE_TIMEOUT="${SESSION_ACQUIRE_TIMEOUT:-10}"
 export LOG_FORMAT="${LOG_FORMAT:-text}"
-
-./token-collector --tokens 850 --batch 5 --no-tui --parallel 1
 
 exec ./zai-api
