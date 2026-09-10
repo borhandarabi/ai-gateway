@@ -74,8 +74,8 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # boots, or there is no dashboard to turn anything on. The *-log companions
 # are stopped too (see service-bootdown): a stopped producer with a running
 # logger looks "up" to nothing but still burns a supervisor each.
-ALL_SERVICES="zenfreeapi mimo zai kimi deepseek grok2api qwen2api flaresolverr cloudflared"
-LOG_SERVICES="zenfreeapi-log mimo-log zai-log kimi-log deepseek-log grok2api-log qwen2api-log flaresolverr-log singbox-log cloudflared-log"
+ALL_SERVICES="zenfreeapi mimo zai kimi deepseek grok2api cloudflared"
+LOG_SERVICES="zenfreeapi-log mimo-log zai-log kimi-log deepseek-log grok2api-log singbox-log cloudflared-log"
 
 is_true () {
     case "${1:-}" in

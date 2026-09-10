@@ -168,11 +168,9 @@ the remaining Go/Node builds.
 | `GROK2API_PORT` | `3004` | Grok (xAI) proxy and web dashboard. |
 | `PROXY_PORT` | `80` | General reverse proxy (serves `/mimo/`, `/zai/`, etc., and the UI on `/`). |
 | `CLASH_API_PORT` | `9090` | sing-box control API port. |
-| `MIXED_PORT` | `7890` | sing-box SOCKS/HTTP mixed port. |
-| `FLARESOLVERR_PORT` | `8191`   | FlareSolverr sidecar port (host-mapped).                                   |
-| `FLARESOLVERR_PROXY_PORT` | `8190`   | FlareSolverr sidecar port (host-mapped).                                   |
-| `FLARESOLVERR_CAPTCHA_SOLVER` | `none` | FlareSolverr captcha-solver adapter name (see upstream docs).       |
-| `QWEN2API_PORT` | `3006` | Qwen2API sidecar port (host-mapped). |
+| `FLARESOLVERR_PORT` | `8191`   | FlareSolverr external service HTTP port (host-mapped). |
+| `FLARESOLVERR_PROXY_PORT` | `8190`   | FlareSolverr outbound proxy port (host-mapped). |
+| `QWENPROXY_PORT` | `7936` | QwenProxy external service port (host-mapped). |
 
 ## OmniRoute (separate service)
 
@@ -201,7 +199,7 @@ Editing and removing later reuse the same button on that row.
 
 The button only appears for the seven services this image actually knows
 are AI providers -- MimoApi, zai-api, kimi-api, DeepSeekApi, grok2api-go,
-Qwen2API, ZenFreeAPI -- driven by the same `knownServices` catalog described
+QwenProxy, ZenFreeAPI -- driven by the same `knownServices` catalog described
 in "Adding a service from a preset" below (`is_ai_provider` in
 `GET /api/known_services`), not a fixed list duplicated in the frontend.
 Anything else in the table (a custom service you added yourself,
@@ -265,7 +263,7 @@ key, not whatever upstream credential it also happens to need:
 | zai-api / GlmApi | `ZAI_AUTH_TOKEN` | |
 | kimi-api | `KIMI_AUTH_KEY` | **Not** `KIMI_ACCESS_TOKEN` -- that one is kimi.com's own upstream session token the service needs to even start, unrelated to what a client presents to kimi-api's own `/v1/chat/completions`. |
 | DeepSeekApi | `PROXY_API_KEY` | **Not** `DEEPSEEK_TOKEN` -- same distinction as kimi above (upstream vs. client-facing). Its effective default is `Waguri-san`, not empty -- DeepSeekFreeAPI's own `envOr("PROXY_API_KEY", "Waguri-san")` falls back to that placeholder for *any* empty value, and the run script always sets it (even to `""`) so the fallback always fires unless you set a real value. |
-| Qwen2API | `QWEN2API_KEY` | |
+| QwenProxy | `QWENPROXY_API_KEY` | External service (https://github.com/johngbl/qwenproxy.git). |
 | MimoApi | `MIMO_API_KEY` | mimo-ai-proxy's own `internal/middleware/auth.go` reads `API_KEY` from the environment and only enforces it when non-empty (genuinely open if left blank, unlike DeepSeek above -- confirmed from source, not assumed). `s6-rc.d/mimo/run` now passes this through -- it didn't before, so this service was always open regardless of upstream support until this was wired up. |
 | ZenFreeAPI | `OPENCODE_API_KEY` | Not a local access gate -- ZenFreeAPI forwards whatever `Authorization` header a client sends straight upstream to OpenCode Zen, falling back to this value if the client sends none. Suggesting it here just means OmniRoute presents the same key ZenFreeAPI would use anyway. |
 | grok2api-go | *(nothing)* | **Not** `GROK2API_SECRET` (`jwtSecret` in its config) -- that key only signs admin-dashboard session JWTs (`adminauth.NewService` in its `application.go`), a completely separate system from the client key that actually guards `/v1/chat/completions` (`ClientAuth` -> `clientkeyapp.Service.Authenticate` in its `middleware/auth.go`). That client key can only be minted from grok2api's own admin panel (`admin`/`admin123456` default login) today, not from a static env var -- generate one there and paste it in manually. |
@@ -294,12 +292,12 @@ the service you're adding actually speaks on its own listen port:
 | kimi-api | ✅ | ❌ | OpenAI-compatible |
 | DeepSeekApi | ✅ | ❌ | OpenAI-compatible |
 | grok2api-go | ✅ | ✅ (native) | OpenAI-compatible |
-| Qwen2API | ✅ | ✅ (native) | OpenAI-compatible |
+| QwenProxy | ✅ | ❌ | OpenAI-compatible |
 | ZenFreeAPI | ✅ | ❌ | OpenAI-compatible |
 
-zai-api, grok2api-go, and Qwen2API do serve a native `/v1/messages` endpoint
+zai-api and grok2api-go do serve a native `/v1/messages` endpoint
 of their own (verified in their upstream source, not assumed), so those
-three *can* be added via the Anthropic-compatible path instead if you
+two *can* be added via the Anthropic-compatible path instead if you
 specifically want to exercise their native implementation -- functionally
 it makes no difference to OmniRoute's own clients either way, so
 **OpenAI-compatible is the recommended, more-tested path for all seven**,
@@ -315,9 +313,9 @@ picks that up automatically instead of the docker-compose default.
 "Add a service" (above the Active services table) has a **Preset** dropdown
 sourced from `GET /api/known_services` -- the same catalog that drives the
 "Add to OmniRoute" button visibility above and the built-in defaults every
-fresh install starts with (see below). Picking one of the nine services
-this image actually ships (mimo, zai, kimi, deepseek, grok2api, qwen2api,
-zenfreeapi, flaresolverr, zai-collect) instead of leaving it on "Custom...":
+fresh install starts with (see below). Picking one of the services
+available in the catalog (mimo, zai, kimi, deepseek, grok2api, qwenproxy,
+zenfreeapi, flaresolverr) instead of leaving it on "Custom...":
 
 - Locks the **Name** field to that service's real name (required for the
   next two points to work -- it has to match the actual `s6-rc.d/<name>`

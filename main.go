@@ -153,13 +153,15 @@ var managedEnvDefaults = map[string]string{
 	"GROK2API_PORT":                "3004",
 	"FLARESOLVERR_PORT":            "8191",
 	"FLARESOLVERR_PROXY_PORT":      "8190",
+	"FLARESOLVERR_HOST":            "flaresolverr",
 	"MIMO_PROXY_PORT":              "2003",
 	"KIMI_PROXY_PORT":              "2002",
 	"DEEPSEEK_PROXY_PORT":          "2005",
 	"ZAI_PROXY_PORT":               "2001",
 	"GROK2API_PROXY_PORT":          "2004",
-	"QWEN2API_PROXY_PORT":          "2006",
-	"QWEN2API_PORT":                "3006",
+	"QWENPROXY_PROXY_PORT":         "2006",
+	"QWENPROXY_PORT":               "7936",
+	"QWENPROXY_HOST":               "qwenproxy",
 }
 
 // backupEnvKeys کلیدهای پیکربندی بکاپ/بازیابی هستند. عمداً از همان مکانیزم
@@ -762,6 +764,10 @@ const htmlContent = `<!DOCTYPE html>
             <div class="field">
               <label for="svcName">Name</label>
               <input type="text" id="svcName" placeholder="e.g. telegram">
+            </div>
+            <div class="field" style="max-width:220px;">
+              <label for="svcHost">Host / Container <span class="hint">(default 127.0.0.1)</span></label>
+              <input type="text" id="svcHost" placeholder="127.0.0.1" title="For external containers/services, enter container name or IP (e.g. qwenproxy, omniroute). Default is 127.0.0.1 for internal services.">
             </div>
             <div class="field">
               <label for="svcListenPort">Listen port (Web) <span class="hint">(required)</span></label>
@@ -1909,13 +1915,24 @@ const htmlContent = `<!DOCTYPE html>
     body.innerHTML = '';
     services.forEach(function(svc){
       var name = svc.name;
+      var host = (svc.host || '').trim();
+      var isExternal = host && host !== '127.0.0.1' && host !== 'localhost';
       var listenPort = svc.listen_port;
       var proxyPort = svc.proxy_port || '-';
       var tr = document.createElement('tr');
       tr.dataset.service = name;
 
       var tdName = document.createElement('td'); tdName.textContent = name;
-      var tdListen = document.createElement('td'); tdListen.className = 'mono'; tdListen.textContent = listenPort;
+      if (isExternal) {
+        var badge = document.createElement('span');
+        badge.className = 'hint';
+        badge.style.cssText = 'margin-inline-start:6px;font-size:11px;padding:1px 5px;background:var(--bg-alt);border:1px solid var(--border);border-radius:3px;';
+        badge.textContent = host;
+        badge.title = 'Target host: ' + host;
+        tdName.appendChild(badge);
+      }
+      var tdListen = document.createElement('td'); tdListen.className = 'mono';
+      tdListen.textContent = (isExternal ? host + ':' : '') + listenPort;
       var tdProxy = document.createElement('td'); tdProxy.className = 'mono'; tdProxy.textContent = proxyPort;
       
       var url = base + '/' + name + '/';
@@ -1972,23 +1989,26 @@ const htmlContent = `<!DOCTYPE html>
       tdAct.appendChild(editBtn);
       tdAct.appendChild(delBtn);
 
-      var envBtn = document.createElement('button');
-      envBtn.className = 'btn btn-ghost btn-sm';
-      envBtn.textContent = 'Env';
-      envBtn.title = 'Manage environment variables for ' + name;
-      envBtn.style.marginInlineStart = '6px';
-      envBtn.onclick = function(){ toggleServiceEnvEditor(tr, svc); };
-      tdAct.appendChild(envBtn);
+      var isExternal = svc.host && svc.host !== '127.0.0.1' && svc.host !== 'localhost';
+      if (!isExternal) {
+        var envBtn = document.createElement('button');
+        envBtn.className = 'btn btn-ghost btn-sm';
+        envBtn.textContent = 'Env';
+        envBtn.title = 'Manage environment variables for ' + name;
+        envBtn.style.marginInlineStart = '6px';
+        envBtn.onclick = function(){ toggleServiceEnvEditor(tr, svc); };
+        tdAct.appendChild(envBtn);
 
-      // Keep Log in the Actions column. It is deliberately created as part
-      // of the base row so it survives configuration/live-selector refreshes.
-      var serviceLogBtn = document.createElement('button');
-      serviceLogBtn.className = 'btn btn-ghost btn-sm service-log';
-      serviceLogBtn.textContent = 'Log';
-      serviceLogBtn.title = 'Watch live logs for ' + name;
-      serviceLogBtn.style.marginInlineStart = '6px';
-      serviceLogBtn.onclick = function(){ startS6LogStream(name); };
-      tdAct.appendChild(serviceLogBtn);
+        // Keep Log in the Actions column. It is deliberately created as part
+        // of the base row so it survives configuration/live-selector refreshes.
+        var serviceLogBtn = document.createElement('button');
+        serviceLogBtn.className = 'btn btn-ghost btn-sm service-log';
+        serviceLogBtn.textContent = 'Log';
+        serviceLogBtn.title = 'Watch live logs for ' + name;
+        serviceLogBtn.style.marginInlineStart = '6px';
+        serviceLogBtn.onclick = function(){ startS6LogStream(name); };
+        tdAct.appendChild(serviceLogBtn);
+      }
 
       var tdOmni = document.createElement('td');
       var knownAI = (omniStatus.known_ai_services || []);
@@ -2347,6 +2367,7 @@ const htmlContent = `<!DOCTYPE html>
     saveBtn.textContent = 'Save';
     saveBtn.onclick = function(){
       var newName = nameInput.value.trim();
+      var newHost = hostInput.value.trim() || '127.0.0.1';
       var newListen = parseInt(listenInput.value, 10);
       var newProxy = parseInt(proxyInput.value, 10);
       if (isNaN(newProxy)) newProxy = 0;
@@ -2358,10 +2379,13 @@ const htmlContent = `<!DOCTYPE html>
       request('/api/edit_service', {
         old_name: name,
         new_name: newName,
+        new_host: newHost,
         new_listen_port: newListen,
         new_proxy_port: newProxy,
         preferred_omniroute_type: epSelect.value,
         env: (function(){
+          var h = (newHost || '').trim().toLowerCase();
+          if (h && h !== '127.0.0.1' && h !== 'localhost') return null;
           var env = {};
           var invalid = false;
           envRows.querySelectorAll('div').forEach(function(row){
@@ -2409,9 +2433,40 @@ const htmlContent = `<!DOCTYPE html>
     editorHint.className = 'hint';
     editorHint.style.marginBottom = '10px';
     editorHint.textContent = 'Configure the public endpoint style and environment variables.';
+    // Host / Container input in the editor box
+    var hostWrap = document.createElement('div');
+    hostWrap.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:8px;';
+    var hostLabel = document.createElement('label');
+    hostLabel.className = 'hint';
+    hostLabel.style.width = '130px';
+    hostLabel.textContent = 'Host / Container:';
+    var hostInput = document.createElement('input');
+    hostInput.type = 'text';
+    hostInput.style.width = '200px';
+    hostInput.placeholder = '127.0.0.1';
+    hostInput.value = svcDef.host || '127.0.0.1';
+    hostWrap.appendChild(hostLabel);
+    hostWrap.appendChild(hostInput);
+
+    var extNotice = document.createElement('div');
+    extNotice.className = 'hint';
+    extNotice.style.cssText = 'margin-top:8px;padding:6px 10px;background:rgba(255,255,255,0.05);border-radius:var(--radius);border-left:3px solid var(--primary);';
+    extNotice.textContent = 'External service: environment variables are configured in its own container/host, not in ai-gateway.';
+
+    function updateEnvVisibility(){
+      var h = (hostInput.value || '').trim().toLowerCase();
+      var isExt = h !== '' && h !== '127.0.0.1' && h !== 'localhost';
+      envRows.style.display = isExt ? 'none' : 'flex';
+      extNotice.style.display = isExt ? 'block' : 'none';
+    }
+    hostInput.oninput = updateEnvVisibility;
+    updateEnvVisibility();
+
     editorBox.appendChild(editorTitle);
     editorBox.appendChild(editorHint);
+    editorBox.appendChild(hostWrap);
     editorBox.appendChild(epWrap);
+    editorBox.appendChild(extNotice);
     editorBox.appendChild(envRows);
     editorCell.appendChild(editorBox);
     editorRow.appendChild(editorCell);
@@ -2467,6 +2522,7 @@ const htmlContent = `<!DOCTYPE html>
     if (!presetName){
       nameInput.value = '';
       nameInput.readOnly = false;
+      if (document.getElementById('svcHost')) document.getElementById('svcHost').value = '';
       listenInput.value = '';
       proxyInput.value = '';
       return;
@@ -2479,6 +2535,7 @@ const htmlContent = `<!DOCTYPE html>
 
     nameInput.value = ks.name;
     nameInput.readOnly = true;
+    if (document.getElementById('svcHost')) document.getElementById('svcHost').value = ks.host || '127.0.0.1';
     listenInput.value = ks.current_listen_port || '';
     proxyInput.value = ks.current_proxy_port || '';
 
@@ -2537,6 +2594,7 @@ const htmlContent = `<!DOCTYPE html>
 
   window.addService = function(){
     var name = document.getElementById('svcName').value.trim();
+    var host = (document.getElementById('svcHost') || {}).value.trim() || '127.0.0.1';
     var listenPort = parseInt(document.getElementById('svcListenPort').value, 10);
     var proxyPort = parseInt(document.getElementById('svcProxyPort').value, 10);
     if (isNaN(proxyPort)) proxyPort = 0;
@@ -2544,14 +2602,15 @@ const htmlContent = `<!DOCTYPE html>
     if (!name){ showMessage('Service name is required', 'danger'); return; }
     if (isNaN(listenPort) || listenPort < 1 || listenPort > 65535){ showMessage('A valid listen port is required', 'danger'); return; }
 
-    var body = { name: name, listen_port: listenPort, proxy_port: proxyPort };
+    var body = { name: name, host: host, listen_port: listenPort, proxy_port: proxyPort };
 
     var omniTypeSelect = document.getElementById('svcOmniType');
     if (omniTypeSelect) body.preferred_omniroute_type = omniTypeSelect.value;
 
     var dynamicWrap = document.getElementById('svcDynamicFields');
     var fieldInputs = dynamicWrap ? dynamicWrap.querySelectorAll('input[data-env-key]') : [];
-    if (fieldInputs.length){
+    var isExt = host && host !== '127.0.0.1' && host !== 'localhost';
+    if (!isExt && fieldInputs.length){
       var configEnv = {};
       fieldInputs.forEach(function(input){ configEnv[input.dataset.envKey] = input.value; });
       body.config_env = configEnv;
@@ -2561,6 +2620,7 @@ const htmlContent = `<!DOCTYPE html>
       if (ok){
         document.getElementById('svcName').value = '';
         document.getElementById('svcName').readOnly = false;
+        if (document.getElementById('svcHost')) document.getElementById('svcHost').value = '';
         document.getElementById('svcListenPort').value = '';
         document.getElementById('svcProxyPort').value = '';
         document.getElementById('svcPreset').value = '';
@@ -3983,7 +4043,7 @@ const htmlContent = `<!DOCTYPE html>
   //  - Every per-service *_PORT / *_PROXY_PORT is edited from the Services
   //    page (Add preset / per-row Edit + Env) -- the Services page is the
   //    single source of truth for service ports.
-  //  - Per-service *_API_KEY / *_KEY secrets (MIMO_API_KEY, QWEN2API_KEY, ...)
+  //  - Per-service *_API_KEY / *_KEY secrets (MIMO_API_KEY, QWENPROXY_API_KEY, ...)
   //    are upstream bearer tokens used only by the service's own s6 run
   //    script; operators edit them via the per-row "Env" editor on the
   //    Services page. They must never render as plaintext on this page, so
@@ -4002,7 +4062,7 @@ const htmlContent = `<!DOCTYPE html>
     DEEPSEEK_PORT: true, DEEPSEEK_PROXY_PORT: true,
     ZAI_PORT: true, ZAI_PROXY_PORT: true,
     GROK2API_PORT: true, GROK2API_PROXY_PORT: true,
-    QWEN2API_PORT: true, QWEN2API_PROXY_PORT: true,
+    QWENPROXY_PORT: true, QWENPROXY_PROXY_PORT: true,
     FLARESOLVERR_PORT: true, FLARESOLVERR_PROXY_PORT: true
   };
   function isHiddenEnvKey(key){
@@ -4429,6 +4489,7 @@ type DockerService struct {
 // refreshSubscription/renderConfig) تا template.json دستی کوچک و تمیز بماند.
 type ServiceDef struct {
 	Name       string            `json:"name"`
+	Host       string            `json:"host,omitempty"`
 	ListenPort int               `json:"listen_port"`
 	ProxyPort  int               `json:"proxy_port"`
 	Env        map[string]string `json:"env,omitempty"`
@@ -4438,6 +4499,27 @@ type ServiceDef struct {
 	// استفاده می‌شود، به معنای اتصال واقعی در OmniRoute نیست (آن در
 	// OmniRouteLink.Type نگه‌داری می‌شود).
 	PreferredOmniRouteType string `json:"preferred_omniroute_type,omitempty"`
+}
+
+func isExternalHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	return h != "" && h != "127.0.0.1" && h != "localhost" && h != "::1"
+}
+
+func (s ServiceDef) TargetHost() string {
+	targetHost := strings.TrimSpace(s.Host)
+	if targetHost == "" {
+		envVar := strings.ToUpper(strings.ReplaceAll(s.Name, "-", "_")) + "_HOST"
+		targetHost = strings.TrimSpace(os.Getenv(envVar))
+	}
+	if targetHost == "" {
+		targetHost = "127.0.0.1"
+	}
+	return targetHost
+}
+
+func (s ServiceDef) IsExternal() bool {
+	return isExternalHost(s.TargetHost())
 }
 
 // ═══════════════════════ Known-service catalog ═══════════════════════════
@@ -4458,18 +4540,18 @@ type ServiceDef struct {
 type knownServiceDef struct {
 	Name             string `json:"name"`
 	Label            string `json:"label"`
+	Host             string `json:"host,omitempty"`
 	ListenPortEnv    string `json:"listen_port_env"`
 	ListenPortDef    int    `json:"listen_port_default"`
 	ProxyPortEnv     string `json:"proxy_port_env,omitempty"`
 	ProxyPortDef     int    `json:"proxy_port_default,omitempty"`
 	IsAIProvider     bool   `json:"is_ai_provider"`
 	DefaultOmniRoute string `json:"default_omniroute_type,omitempty"`
+	IsExternal       bool   `json:"is_external,omitempty"`
 }
 
-// knownServices فهرست کامل سرویس‌های نصب‌شده در این ایمیج است (بدون
-// omniroute -- دیگر بخشی از این ایمیج نیست، در docker-compose.yml/omniroute/
-// به‌صورت کانتینر جدا اجرا می‌شود). ترتیب همان ترتیبی است که در فرم
-// «Add a service» و جدول Active services نمایش داده می‌شود.
+// knownServices فهرست کامل سرویس‌های پیش‌فرض است. سرویس‌های داخلی در این ایمیج
+// اجرا می‌شوند و سرویس‌های خارجی (مانند qwenproxy) در کانتینر جداگانه اجرا می‌گردند.
 var knownServices = []knownServiceDef{
 	{Name: "mimo", Label: "MimoApi", ListenPortEnv: "MIMO_PORT", ListenPortDef: 3003,
 		ProxyPortEnv: "MIMO_PROXY", ProxyPortDef: 2003,
@@ -4485,15 +4567,17 @@ var knownServices = []knownServiceDef{
 		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
 	{Name: "grok2api", Label: "grok2api-go", ListenPortEnv: "GROK2API_PORT", ListenPortDef: 3004,
 		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
-	{Name: "qwen2api", Label: "Qwen2API", ListenPortEnv: "QWEN2API_PORT", ListenPortDef: 3006,
-		ProxyPortEnv: "QWEN2API_PROXY_PORT", ProxyPortDef: 2006,
-		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
+	{Name: "qwenproxy", Label: "QwenProxy (External)", Host: "qwenproxy",
+		ListenPortEnv: "QWENPROXY_PORT", ListenPortDef: 7936,
+		ProxyPortEnv: "QWENPROXY_PROXY_PORT", ProxyPortDef: 2006,
+		IsAIProvider: true, DefaultOmniRoute: "openai-compatible", IsExternal: true},
 	{Name: "zenfreeapi", Label: "ZenFreeAPI", ListenPortEnv: "ZENFREEAPI_PORT", ListenPortDef: 3008,
 		ProxyPortEnv: "ZENFREEAPI_PROXY_PORT", ProxyPortDef: 2008,
 		IsAIProvider: true, DefaultOmniRoute: "openai-compatible"},
-	{Name: "flaresolverr", Label: "FlareSolverr", ListenPortEnv: "FLARESOLVERR_PORT", ListenPortDef: 8191,
+	{Name: "flaresolverr", Label: "FlareSolverr (External)", Host: "flaresolverr",
+		ListenPortEnv: "FLARESOLVERR_PORT", ListenPortDef: 8191,
 		ProxyPortEnv: "FLARESOLVERR_PROXY_PORT", ProxyPortDef: 8190,
-		IsAIProvider: false},
+		IsAIProvider: false, IsExternal: true},
 }
 
 func findKnownService(name string) (knownServiceDef, bool) {
@@ -4550,8 +4634,6 @@ func heuristicSecretField(envKey string) bool {
 //   - kimi        : github.com/izaart95-jpg/KimiFreeAPI       (main.go envOrDefault)
 //   - deepseek    : github.com/izaart95-jpg/DeepSeekFreeAPI   (main.go envOr)
 //   - grok2api    : config.yaml generated in its s6 run script (server/auth sections)
-//   - qwen2api    : github.com/XxxXTeam/Qwen2API_Go           (internal/config)
-//   - flaresolverr: github.com/Rorqualx/flaresolverr-go        (internal/config)
 var serviceDefaultEnvs = map[string]map[string]string{
 	"zenfreeapi": {
 		"OPENCODE_ZEN_BASE":	"https://opencode.ai/zen/v1",
@@ -4602,35 +4684,6 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"GROK2API_KEY":    "", // bootstrap encryption key; random if left empty
 		"GROK2API_SECRET": "", // bootstrap JWT secret; random if left empty
 	},
-	"qwen2api": {
-		"QWEN2API_KEY":            "Waguri", // upstream API_KEY: also becomes AdminKey
-		"DATA_SAVE_MODE":          "none",
-		"SIMPLE_MODEL_MAP":        "false",
-		"OUTPUT_THINK":            "false",
-		"AUTO_REFRESH":            "true",
-		"AUTO_REFRESH_INTERVAL":   "21600", // seconds (upstream 6h)
-		"CACHE_MODE":              "default",
-		"LOG_LEVEL":               "INFO", // upstream getEnv("LOG_LEVEL", "INFO")
-		"BROWSER_HEADLESS":        "true",
-		"BROWSER_TIMEOUT_SECONDS": "45",
-	},
-	"flaresolverr": {
-		// Keys are the ones its s6 run script exports (FLARESOLVERR_*
-		// prefixed there); upstream flaresolverr-go reads the bare names.
-		"FLARESOLVERR_LOG_LEVEL":                "info",
-		"FLARESOLVERR_LOG_HTML":                 "false",
-		"FLARESOLVERR_HEADLESS":                 "true",
-		"FLARESOLVERR_BROWSER_POOL_SIZE":        "1", // upstream default 3; image ships 1 for small containers
-		"FLARESOLVERR_BROWSER_POOL_TIMEOUT":     "30s",
-		"FLARESOLVERR_MAX_MEMORY_MB":            "1024", // upstream 2048; image caps at 1024
-		"FLARESOLVERR_SESSION_TTL":              "30m",
-		"FLARESOLVERR_SESSION_CLEANUP_INTERVAL": "1m",
-		"FLARESOLVERR_MAX_SESSIONS":             "100",
-		"FLARESOLVERR_DEFAULT_TIMEOUT":          "60s",
-		"FLARESOLVERR_MAX_TIMEOUT":              "300s",
-		"FLARESOLVERR_RATE_LIMIT_ENABLED":       "true",
-		"FLARESOLVERR_RATE_LIMIT_RPM":           "60",
-	},
 }
 
 // applyServiceDefaultEnvs هر سرویس پیش‌فرضی که هنوز env ندارد را با
@@ -4641,6 +4694,9 @@ var serviceDefaultEnvs = map[string]map[string]string{
 func applyServiceDefaultEnvs(services []ServiceDef) ([]ServiceDef, bool) {
 	changed := false
 	for i := range services {
+		if services[i].IsExternal() {
+			continue
+		}
 		defaults, ok := serviceDefaultEnvs[services[i].Name]
 		if !ok {
 			continue
@@ -4816,6 +4872,78 @@ func readStateOrDefault() AppState {
 	if updated, changed := applyServiceDefaultEnvs(s.Services); changed {
 		s.Services = updated
 		_ = writeState(s)
+	}
+
+	// Migrate legacy qwen2api to external qwenproxy
+	qwenMigrated := false
+	for i, svc := range s.Services {
+		if svc.Name == "qwen2api" {
+			s.Services[i] = ServiceDef{
+				Name:                   "qwenproxy",
+				Host:                   "qwenproxy",
+				ListenPort:             getEnvIntDefault("QWENPROXY_PORT", 7936),
+				ProxyPort:              getEnvIntDefault("QWENPROXY_PROXY_PORT", 2006),
+				PreferredOmniRouteType: "openai-compatible",
+			}
+			qwenMigrated = true
+			break
+		}
+	}
+	if qwenMigrated {
+		_ = writeState(s)
+	}
+
+	// Migrate flaresolverr to external service
+	flareMigrated := false
+	for i, svc := range s.Services {
+		if svc.Name == "flaresolverr" && (svc.Host == "" || svc.Host == "127.0.0.1" || svc.Host == "localhost" || len(svc.Env) > 0) {
+			s.Services[i].Host = "flaresolverr"
+			s.Services[i].Env = nil
+			flareMigrated = true
+			break
+		}
+	}
+	if flareMigrated {
+		_ = writeState(s)
+	}
+
+	// Ensure services configured via DEFAULT_SERVICES exist in state.Services
+	defaultDefs := parseDefaultServices()
+	if len(defaultDefs) > 0 {
+		defChanged := false
+		for _, ds := range defaultDefs {
+			found := false
+			for i, svc := range s.Services {
+				if svc.Name == ds.Name {
+					found = true
+					if ds.Host != "" && svc.Host != ds.Host {
+						s.Services[i].Host = ds.Host
+						defChanged = true
+					}
+					if ds.ListenPort != 0 && svc.ListenPort != ds.ListenPort {
+						s.Services[i].ListenPort = ds.ListenPort
+						defChanged = true
+					}
+					if ds.ProxyPort != 0 && svc.ProxyPort != ds.ProxyPort {
+						s.Services[i].ProxyPort = ds.ProxyPort
+						defChanged = true
+					}
+					break
+				}
+			}
+			if !found {
+				s.Services = append(s.Services, ServiceDef{
+					Name:       ds.Name,
+					Host:       ds.Host,
+					ListenPort: ds.ListenPort,
+					ProxyPort:  ds.ProxyPort,
+				})
+				defChanged = true
+			}
+		}
+		if defChanged {
+			_ = writeState(s)
+		}
 	}
 
 	return s
@@ -5106,11 +5234,13 @@ type defaultServiceDef struct {
 	Name       string
 	ProxyPort  int
 	ListenPort int
+	Host       string
 }
 
 // parseDefaultServices لیست سرویس‌های پیش‌فرض را از متغیر محیطی DEFAULT_SERVICES
-// می‌خواند، با فرمت "name:proxyPort:listenPort" — مثلاً "telegram:2083:3083,youtube:2084".
-// پورت‌ها آپشنال هستند. در صورت عدم تعریف، مقادیر صفر در نظر گرفته می‌شوند.
+// می‌خواند، با فرمت "name:proxyPort:listenPort:host" یا "name:proxyPort:listenPort" —
+// مثلاً "telegram:2083:3083,qwenproxy:2006:7936:qwenproxy,youtube:2084".
+// پورت‌ها و هاست آپشنال هستند. در صورت عدم تعریف، مقادیر پیش‌فرض/لوکال در نظر گرفته می‌شوند.
 func parseDefaultServices() []defaultServiceDef {
 	raw := strings.TrimSpace(os.Getenv("DEFAULT_SERVICES"))
 	if raw == "" {
@@ -5123,7 +5253,7 @@ func parseDefaultServices() []defaultServiceDef {
 			continue
 		}
 		kv := strings.Split(part, ":")
-		if len(kv) > 3 {
+		if len(kv) > 4 {
 			log.Printf("DEFAULT_SERVICES: skipping malformed entry %q (too many fields)", part)
 			continue
 		}
@@ -5138,7 +5268,7 @@ func parseDefaultServices() []defaultServiceDef {
 		listenPort := 0
 		var err error
 
-		if len(kv) > 1 && strings.TrimSpace(kv[1]) != "" {
+		if len(kv) > 1 && strings.TrimSpace(kv[1]) != "" && strings.TrimSpace(kv[1]) != "0" {
 			proxyPort, err = strconv.Atoi(strings.TrimSpace(kv[1]))
 			if err != nil || proxyPort < 1 || proxyPort > 65535 {
 				log.Printf("DEFAULT_SERVICES: skipping invalid entry %q (invalid proxyPort)", part)
@@ -5146,7 +5276,7 @@ func parseDefaultServices() []defaultServiceDef {
 			}
 		}
 
-		if len(kv) > 2 && strings.TrimSpace(kv[2]) != "" {
+		if len(kv) > 2 && strings.TrimSpace(kv[2]) != "" && strings.TrimSpace(kv[2]) != "0" {
 			listenPort, err = strconv.Atoi(strings.TrimSpace(kv[2]))
 			if err != nil || listenPort < 1 || listenPort > 65535 {
 				log.Printf("DEFAULT_SERVICES: skipping invalid entry %q (invalid listenPort)", part)
@@ -5154,7 +5284,12 @@ func parseDefaultServices() []defaultServiceDef {
 			}
 		}
 
-		defs = append(defs, defaultServiceDef{Name: name, ProxyPort: proxyPort, ListenPort: listenPort})
+		host := ""
+		if len(kv) > 3 {
+			host = strings.TrimSpace(kv[3])
+		}
+
+		defs = append(defs, defaultServiceDef{Name: name, ProxyPort: proxyPort, ListenPort: listenPort, Host: host})
 	}
 	return defs
 }
@@ -5239,6 +5374,7 @@ func bootstrapFreshInstall() {
 		}
 		defaultServices = append(defaultServices, ServiceDef{
 			Name:                   ks.Name,
+			Host:                   ks.Host,
 			ListenPort:             listenPort,
 			ProxyPort:              proxyPort,
 			PreferredOmniRouteType: ks.DefaultOmniRoute,
@@ -5256,6 +5392,9 @@ func bootstrapFreshInstall() {
 				if svc.ListenPort != 0 {
 					defaultServices[i].ListenPort = svc.ListenPort
 				}
+				if svc.Host != "" {
+					defaultServices[i].Host = svc.Host
+				}
 				found = true
 				break
 			}
@@ -5263,6 +5402,7 @@ func bootstrapFreshInstall() {
 		if !found {
 			defaultServices = append(defaultServices, ServiceDef{
 				Name:       svc.Name,
+				Host:       svc.Host,
 				ListenPort: svc.ListenPort,
 				ProxyPort:  svc.ProxyPort,
 			})
@@ -7550,9 +7690,13 @@ func syncServicesToTemplate(state AppState, tmpl map[string]interface{}) {
 		inboundTag := "in-" + svc.Name
 		selectorTag := "select-" + svc.Name
 
+		listenAddr := "127.0.0.1"
+		if svc.IsExternal() {
+			listenAddr = "0.0.0.0"
+		}
 		newInbounds = append(newInbounds, map[string]interface{}{
 			"tag":         inboundTag,
-			"listen":      "127.0.0.1",
+			"listen":      listenAddr,
 			"listen_port": svc.ProxyPort,
 			"type":        "mixed",
 		})
@@ -7675,7 +7819,7 @@ func omniRouteErrorMessage(resp map[string]interface{}, fallback string) string 
 //   - zai:      ZAI_AUTH_TOKEN  (پیش‌فرض همان placeholder "Waguri")
 //   - kimi:     KIMI_AUTH_KEY   (نه KIMI_ACCESS_TOKEN -- آن یکی upstream است)
 //   - deepseek: PROXY_API_KEY   (نه DEEPSEEK_TOKEN -- آن یکی upstream است)
-//   - qwen2api: QWEN2API_KEY
+//   - qwenproxy: QWENPROXY_API_KEY (سرویس خارجی)
 //   - mimo:     MIMO_API_KEY   (خودِ mimo-ai-proxy در internal/middleware/
 //     auth.go از os.Getenv("API_KEY") می‌خواند و فقط وقتی غیرخالی باشد اجرا
 //     می‌شود؛ s6-rc.d/mimo/run اکنون این را از MIMO_API_KEY پاس می‌دهد --
@@ -7695,7 +7839,7 @@ var omniRouteSuggestedKeyEnv = map[string]struct {
 	"zai":        {"ZAI_AUTH_TOKEN", "Waguri"},
 	"kimi":       {"KIMI_AUTH_KEY", "Waguri"},
 	"deepseek":   {"PROXY_API_KEY", "Waguri"},
-	"qwen2api":   {"QWEN2API_KEY", "Waguri"},
+	"qwenproxy":  {"QWENPROXY_API_KEY", ""},
 	"mimo":       {"MIMO_API_KEY", "Waguri"},
 	"zenfreeapi": {"OPENCODE_API_KEY", "Waguri"},
 }
@@ -8041,6 +8185,7 @@ func knownServicesHandler(w http.ResponseWriter, r *http.Request) {
 func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name               string            `json:"name"`
+		Host               string            `json:"host,omitempty"`
 		ListenPort         int               `json:"listen_port"`
 		ProxyPort          int               `json:"proxy_port,omitempty"`
 		ConfigEnv          map[string]string `json:"config_env,omitempty"`
@@ -8052,7 +8197,11 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	log.Printf("addServiceHandler: name=%s, listen_port=%d, proxy_port=%d", req.Name, req.ListenPort, req.ProxyPort)
+	req.Host = strings.TrimSpace(req.Host)
+	if req.Host == "" {
+		req.Host = "127.0.0.1"
+	}
+	log.Printf("addServiceHandler: name=%s, host=%s, listen_port=%d, proxy_port=%d", req.Name, req.Host, req.ListenPort, req.ProxyPort)
 
 	if !serviceNameRe.MatchString(req.Name) {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Service name must be 1-32 characters: letters, digits, underscore, hyphen"})
@@ -8093,8 +8242,12 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Service %q already exists", req.Name)})
 			return
 		}
-		if s.ListenPort == req.ListenPort {
-			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q", req.ListenPort, s.Name)})
+		sHost := strings.TrimSpace(s.Host)
+		if sHost == "" {
+			sHost = "127.0.0.1"
+		}
+		if sHost == req.Host && s.ListenPort == req.ListenPort {
+			jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q on %s", req.ListenPort, s.Name, sHost)})
 			return
 		}
 		if req.ProxyPort != 0 && s.ProxyPort == req.ProxyPort {
@@ -8103,21 +8256,26 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// اگر config_env فرستاده شده، فقط برای سرویس‌های واقعاً شناخته‌شده (که یک
-	// s6-rc.d/<name>/run واقعی دارند) اعمالش کن -- برای یک نام دلخواه/سفارشی
-	// معنا ندارد (applyServiceEnvToRun هم به همین دلیل خودش خطا می‌دهد).
-	if _, known := findKnownService(req.Name); known {
+	// اگر سرویس خارجی باشد، env متعلق به کانتینر بیرونی است و فایل run در s6 ندارد
+	if isExternalHost(req.Host) {
+		if len(configEnv) > 0 {
+			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Environment variables cannot be configured for external services"})
+			return
+		}
+		configEnv = nil
+	} else if _, known := findKnownService(req.Name); known {
 		if _, err := applyServiceEnvWithPort(req.Name, configEnv, req.ListenPort); err != nil {
 			jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 			return
 		}
 	} else if len(configEnv) > 0 {
-		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known services, not %q", req.Name)})
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": fmt.Sprintf("config_env is only supported for known internal services, not %q", req.Name)})
 		return
 	}
 
 	state.Services = append(state.Services, ServiceDef{
 		Name:                   req.Name,
+		Host:                   req.Host,
 		ListenPort:             req.ListenPort,
 		ProxyPort:              req.ProxyPort,
 		Env:                    configEnv,
@@ -8127,8 +8285,10 @@ func addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, http.StatusInternalServerError, map[string]interface{}{"error": "Failed to save state: " + err.Error()})
 		return
 	}
-	if _, known := findKnownService(req.Name); known {
-		restartS6ServiceIfWanted(req.Name)
+	if !isExternalHost(req.Host) {
+		if _, known := findKnownService(req.Name); known {
+			restartS6ServiceIfWanted(req.Name)
+		}
 	}
 
 	var tmpl map[string]interface{}
@@ -8217,6 +8377,7 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OldName              string            `json:"old_name"`
 		NewName              string            `json:"new_name"`
+		NewHost              string            `json:"new_host,omitempty"`
 		NewListenPort        int               `json:"new_listen_port"`
 		NewProxyPort         int               `json:"new_proxy_port,omitempty"`
 		PreferredOmniRoute   string            `json:"preferred_omniroute_type,omitempty"`
@@ -8228,6 +8389,10 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	req.OldName = strings.TrimSpace(req.OldName)
 	req.NewName = strings.TrimSpace(req.NewName)
+	req.NewHost = strings.TrimSpace(req.NewHost)
+	if req.NewHost == "" {
+		req.NewHost = "127.0.0.1"
+	}
 
 	if req.OldName == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "old_name is required"})
@@ -8269,8 +8434,12 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Service %q already exists", req.NewName)})
 				return
 			}
-			if s.ListenPort == req.NewListenPort {
-				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q", req.NewListenPort, s.Name)})
+			sHost := strings.TrimSpace(s.Host)
+			if sHost == "" {
+				sHost = "127.0.0.1"
+			}
+			if sHost == req.NewHost && s.ListenPort == req.NewListenPort {
+				jsonResponse(w, http.StatusConflict, map[string]interface{}{"error": fmt.Sprintf("Listen port %d is already in use by %q on %s", req.NewListenPort, s.Name, sHost)})
 				return
 			}
 			if req.NewProxyPort != 0 && s.ProxyPort == req.NewProxyPort {
@@ -8298,21 +8467,27 @@ func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		newEnv = normalized
 	}
+	if isExternalHost(req.NewHost) {
+		newEnv = nil
+	}
 	state.Services[targetIdx] = ServiceDef{
 		Name:                   req.NewName,
+		Host:                   req.NewHost,
 		ListenPort:             req.NewListenPort,
 		ProxyPort:              req.NewProxyPort,
 		Env:                    newEnv,
 		PreferredOmniRouteType: req.PreferredOmniRoute,
 	}
 	// The listener port is the service's canonical PORT. Apply it even when
-	// the request changed no custom environment variables.
+	// the request changed no custom environment variables (only for internal services).
 	liveApplied := false
-	if _, known := findKnownService(req.OldName); known {
-		var err error
-		liveApplied, err = applyServiceEnvWithPort(req.OldName, newEnv, req.NewListenPort)
-		if err != nil {
-			log.Printf("edit_service: applying env to %q run script: %v", req.OldName, err)
+	if !isExternalHost(req.NewHost) {
+		if _, known := findKnownService(req.OldName); known {
+			var err error
+			liveApplied, err = applyServiceEnvWithPort(req.OldName, newEnv, req.NewListenPort)
+			if err != nil {
+				log.Printf("edit_service: applying env to %q run script: %v", req.OldName, err)
+			}
 		}
 	}
 
@@ -8379,6 +8554,12 @@ func updateServiceEnvHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if serviceIndex < 0 {
 		jsonResponse(w, http.StatusNotFound, map[string]interface{}{"error": fmt.Sprintf("Service %q not found", req.Name)})
+		return
+	}
+	if state.Services[serviceIndex].IsExternal() {
+		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{
+			"error": fmt.Sprintf("Service %q is an external service (%s); environment variables are only managed for internal services", req.Name, state.Services[serviceIndex].TargetHost()),
+		})
 		return
 	}
 	liveApplied, err := applyServiceEnvWithPort(req.Name, env, state.Services[serviceIndex].ListenPort)
@@ -9755,7 +9936,8 @@ func buildProxyMux(services []ServiceDef) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	for _, svc := range services {
-		target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", svc.ListenPort))
+		host := svc.TargetHost()
+		target, err := url.Parse(fmt.Sprintf("http://%s:%d", host, svc.ListenPort))
 		if err != nil {
 			log.Printf("buildProxyMux: skipping %q: %v", svc.Name, err)
 			continue
@@ -9785,7 +9967,7 @@ func buildProxyMux(services []ServiceDef) *http.ServeMux {
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				log.Printf("reverse proxy: /%s -> %s failed: %v", name, target, err)
 				w.WriteHeader(http.StatusBadGateway)
-				_, _ = fmt.Fprintf(w, "Bad Gateway: Service %q on 127.0.0.1:%d is unreachable (%v)\n", name, svc.ListenPort, err)
+				_, _ = fmt.Fprintf(w, "Bad Gateway: Service %q on %s:%d is unreachable (%v)\n", name, host, svc.ListenPort, err)
 			},
 		}
 		stripped := http.StripPrefix(prefix, proxy)
@@ -13250,6 +13432,9 @@ func main() {
 	// source and live copies of each run script, including the canonical PORT.
 	ensureDefaultFiles()
 	for _, svc := range readStateOrDefault().Services {
+		if svc.IsExternal() {
+			continue
+		}
 		if _, known := findKnownService(svc.Name); !known {
 			continue
 		}

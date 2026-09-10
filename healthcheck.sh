@@ -63,8 +63,6 @@ check_if_up mimo         "http://127.0.0.1:${MIMO_PORT:-3003}/"
 check_if_up kimi         "http://127.0.0.1:${KIMI_PORT:-3002}/"
 check_if_up zai          "http://127.0.0.1:${ZAI_PORT:-3001}/health"
 check_if_up grok2api     "http://127.0.0.1:${GROK2API_PORT:-3004}/healthz"
-check_if_up qwen2api     "http://127.0.0.1:${QWEN2API_PORT:-3006}"
-check_if_up flaresolverr "http://127.0.0.1:${FLARESOLVERR_PORT:-8191}/health"
 
 # cloudflared has no HTTP endpoint to poll; only flag it as unhealthy if a
 # token was actually provided AND s6 wants it up.

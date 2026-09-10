@@ -23,7 +23,7 @@ volume mounted at `/data`). OmniRoute runs as a SEPARATE container/image.
 
 | Symbol | What |
 |---|---|
-| `ServiceDef` (~4112) | `{Name, ListenPort, ProxyPort, Env}` — one row of "Active services"; persisted in `state.json` → `.services[]` |
+| `ServiceDef` (~4487) | `{Name, Host, ListenPort, ProxyPort, Env, PreferredOmniRouteType}` — one row of "Active services"; persisted in `state.json` → `.services[]`. `Host` specifies container/host name for external services (default `127.0.0.1`). Env export/edit applies strictly to internal services. |
 | `serviceDefaultEnvs` (~4117) | map[service]map[key]default — upstream-verified env seeds (see §4) |
 | `applyServiceDefaultEnvs` | fills ONLY missing keys; never overwrites user values |
 | `readStateOrDefault` (~4236) | loads state.json + legacy migrations + omni/zenfree ensure + env seeding |
@@ -45,7 +45,7 @@ Files outside main.go:
 - `railway.template.json` — Railway deploy template incl. variable catalog (ENABLE_* etc.)
 - `main_seed_test.go` — tests for env seeding (idempotency, coverage)
 
-Longruns: `singbox`(core, always up) zenfreeapi mimo zai kimi deepseek grok2api qwen2api flaresolverr cloudflared.
+Longruns: `singbox`(core, always up) zenfreeapi mimo zai kimi deepseek grok2api cloudflared.
 Oneshots: network-mode-init, singbox-ready (+*-log companions, *-pipeline).
 
 ## 3. Boot policy & service control (v3, 2026-08-24)
@@ -148,46 +148,21 @@ Config is a YAML HEREDOC generated once by `s6-rc.d/grok2api/run` into
 To change KEY/SECRET afterwards you must delete /data/grok2api/config.yaml (regenerates).
 There is NO GROK2API_SSO env anywhere upstream — don't invent one (was wrongly added once, removed).
 
-### 4.7 qwen2api (Go)
-Repo: https://github.com/XxxXTeam/Qwen2API_Go.git#main (internal/config/config.go Load())
-| Upstream key | Default | Notes |
-|---|---|---|
-| ⭐ API_KEY (bundle QWEN2API_KEY) | Waguri | csv; FIRST entry becomes AdminKey |
-| ⭐ DATA_SAVE_MODE | none | |
-| ⭐ SIMPLE_MODEL_MAP | false | |
-| ⭐ OUTPUT_THINK | false | |
-| ⭐ AUTO_REFRESH | true | |
-| ⭐ AUTO_REFRESH_INTERVAL | 21600 (6h, seconds) | |
-| ⭐ CACHE_MODE | default | |
-| ⭐ LOG_LEVEL | INFO | plain upstream name (NOT "QWEN2API_LOG_LEVEL") |
-| ⭐ BROWSER_HEADLESS | true | qwen2api itself can drive a browser |
-| ⭐ BROWSER_TIMEOUT_SECONDS | 45 | |
-| BATCH_LOGIN_CONCURRENCY | 5 | not seeded |
-| SEARCH_INFO_MODE / DEBUG_MODE / ENABLE_FILE_LOG / LOG_DIR / MAX_LOG_FILE_SIZE / MAX_LOG_FILES | various | not seeded |
-| QWEN_CHAT_PROXY_URL | https://chat.qwen.ai | not seeded |
-| LISTEN_ADDRESS / SERVICE_PORT | 0.0.0.0 / 3000 | derived (HOST←BIND_ADDR, PORT←QWEN2API_PORT) |
-| PROXY_URL | — | run script: http://127.0.0.1:${QWEN2API_PROXY_PORT:-2006} |
-| BROWSER_AUTH_ENABLED(true)/BROWSER_EXECUTABLE_PATH/CHAT_CLEANUP_MODE(0)/PROMPT_OVERRIDES_JSON/REDIS_URL | — | not seeded |
+### 4.7 qwenproxy (Node.js + Patchright) — External Service
+Repo: https://github.com/johngbl/qwenproxy.git#main
+Runs as a separate container/service (`qwenproxy`) outside the main ai-gateway image due to Chromium/Patchright dependencies.
+- Port: `7936` (internal container port)
+- ProxyPort in ai-gateway: `2006` (routes outbound via sing-box `in-qwenproxy`)
+- Reverse-proxy path in ai-gateway: `/qwenproxy` -> `http://qwenproxy:7936`
+- Env vars are managed in its own container/compose environment (`PROXY_API_KEY`, etc.), not inside s6 run scripts.
 
-### 4.8 flaresolverr-go
-Repo: https://github.com/Rorqualx/flaresolverr-go.git#main (internal/config/config.go getEnv*)
-Its run script reads FLARESOLVERR_*-prefixed container env and exports the BARE names;
-starts Xvfb :99 when HEADLESS=true (soffware GL: LIBGL_ALWAYS_SOFTWARE=1, LP_NUM_THREADS=4);
-drops to user flaresolverr; needs /usr/bin/chromium.
-| Managed (prefixed) key | Seeded default | Upstream default if different |
-|---|---|---|
-| ⭐ FLARESOLVERR_LOG_LEVEL | info | info |
-| ⭐ FLARESOLVERR_LOG_HTML | false | false |
-| ⭐ FLARESOLVERR_HEADLESS | true | true |
-| ⭐ FLARESOLVERR_BROWSER_POOL_SIZE | **1** | 3 |
-| ⭐ FLARESOLVERR_BROWSER_POOL_TIMEOUT | 30s | 30s |
-| ⭐ FLARESOLVERR_MAX_MEMORY_MB | **1024** | 2048 |
-| ⭐ FLARESOLVERR_SESSION_TTL / _CLEANUP_INTERVAL | 30m / 1m | same |
-| ⭐ FLARESOLVERR_MAX_SESSIONS | 100 | 100 |
-| ⭐ FLARESOLVERR_DEFAULT_TIMEOUT / _MAX_TIMEOUT | 60s / 300s | same |
-| ⭐ FLARESOLVERR_RATE_LIMIT_ENABLED / _RPM | true / 60 | same |
-Not seeded (upstream): CLEARANCE_CACHE_ENABLED=true, CLEARANCE_TTL=25m, PROXY_URL/_USERNAME/_PASSWORD, PROXY_LIST, PROXY_STRATEGY=sticky-domain, TZ, LANG, TEST_URL, DISABLE_MEDIA, PPROF_*, TRUST_PROXY=false, IGNORE_CERT_ERRORS=false, CORS_ALLOWED_ORIGINS, ALLOW_LOCAL_PROXIES=false, DNS_REBINDING_PROTECTION=true, API_KEY_ENABLED=false, API_KEY, CAPTCHA_NATIVE_ATTEMPTS=3, CAPTCHA_FALLBACK_ENABLED, TWOCAPTCHA_API_KEY/CAPSOLVER_API_KEY/ANTICAPTCHA_API_KEY/NINEKW_API_KEY, CAPTCHA_PRIMARY_PROVIDER=2captcha, CAPTCHA_SOLVER_TIMEOUT=120s, SELECTORS_* .
-NOTE: "FLARESOLVERR_CAPTCHA_SOLVER" belongs to the OLD Python port — the Go port does NOT read it.
+### 4.8 flaresolverr-go — External Service
+Image: `rorqualx/flaresolverr-go:latest` (https://github.com/Rorqualx/flaresolverr-go.git)
+Runs as a separate container/service (`flaresolverr`) outside the main ai-gateway image due to Chromium/Xvfb memory footprint (~400MB+).
+- Port: `8191` (internal container port)
+- ProxyPort in ai-gateway: `8190` (routes outbound via sing-box `in-flaresolverr`)
+- Reverse-proxy path in ai-gateway: `/flaresolverr` -> `http://flaresolverr:8191`
+- Env vars are managed in its own container/compose environment (`PROXY_URL`, etc.), not inside s6 run scripts.
 
 ## 5. Pitfalls & rules (learned the hard way)
 
@@ -214,8 +189,8 @@ NOTE: "FLARESOLVERR_CAPTCHA_SOLVER" belongs to the OLD Python port — the Go po
    those services, or a deliberately-stopped service marks the whole container unhealthy.
 5. **grok2api config.yaml is generate-once** — env changes need the file deleted.
 6. **Railway template**: add new operator-facing vars to `railway.template.json` variables AND
-   `.env.example`; Railway caps each image at 1GB/2vCPU — Chromium services (flaresolverr,
-   zai-collect, qwen2api browser mode) are the memory bombs; keep them opt-in.
+   `.env.example`; Railway caps each image at 1GB/2vCPU — Chromium services (like
+   zai-collect) are the memory bombs; keep them opt-in.
 7. **Windows dev host quirks**: terminal is git-bash (MSYS); native tools need `C:/...` paths;
    `patch` tool can mismatch CRLF — for Dockerfile-style edits a small python byte-replace or
    full `write_file` is safer. Blocked inline commands land in
@@ -231,8 +206,8 @@ NOTE: "FLARESOLVERR_CAPTCHA_SOLVER" belongs to the OLD Python port — the Go po
 ```bash
 cd "$LOCALAPPDATA/Temp/upstream"
 for r in hooshidev3/mimo-ai-proxy izaart95-jpg/GLM-Free-API izaart95-jpg/KimiFreeAPI \
-         izaart95-jpg/DeepSeekFreeAPI XxxXTeam/Qwen2API_Go Rorqualx/flaresolverr-go \
-         izaart95-jpg/ZenFreeAPI; do git clone -q --depth 1 "https://github.com/$r.git"; done
+         izaart95-jpg/DeepSeekFreeAPI Rorqualx/flaresolverr-go \
+         izaart95-jpg/ZenFreeAPI johngbl/qwenproxy; do git clone -q --depth 1 "https://github.com/$r.git"; done
 # env extraction shortcut (Go services):
 grep -rhoE 'os\.(Getenv|LookupEnv)\("[A-Z0-9_]+"\)' <dir> --include='*.go' | sort -u
 ```

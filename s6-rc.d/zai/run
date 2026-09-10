@@ -20,4 +20,9 @@ export UPSTREAM_MIN_INTERVAL_MS="${UPSTREAM_MIN_INTERVAL_MS:-200}"
 export SESSION_ACQUIRE_TIMEOUT="${SESSION_ACQUIRE_TIMEOUT:-10}"
 export LOG_FORMAT="${LOG_FORMAT:-text}"
 
+export HTTP_PROXY="http://127.0.0.1:${ZAI_PROXY:-2001}"
+export HTTPS_PROXY="http://127.0.0.1:${ZAI_PROXY:-2001}"
+export ALL_PROXY="http://127.0.0.1:${ZAI_PROXY:-2001}"
+export NO_PROXY="localhost,127.0.0.1"
+
 exec ./zai-api

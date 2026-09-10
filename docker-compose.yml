@@ -9,9 +9,7 @@ services:
         zai_src: ${ZAI_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
         deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
-        qwen2api_src: ${QWEN2API_REPO:-https://github.com/XxxXTeam/Qwen2API_Go.git#main}
         zenfreeapi_src: ${ZENFREEAPI_REPO:-https://github.com/izaart95-jpg/ZenFreeAPI.git#main}
-        flaresolverr_src: "${FLARESOLVERR_REPO:-https://github.com/Rorqualx/flaresolverr-go.git#main}"
     image: ai-gateway:local
     container_name: ai-gateway
     restart: unless-stopped
@@ -29,10 +27,8 @@ services:
       - "${ZAI_PORT:-3002}:${ZAI_PORT:-3002}"     # zai-api / GlmApi
       - "${DEEPSEEK_PORT:-3005}:${DEEPSEEK_PORT:-3005}"     # DeepSeekApi
       - "${GROK2API_PORT:-3004}:${GROK2API_PORT:-3004}"
-      - "${QWEN2API_PORT:-3006}:${QWEN2API_PORT:-3006}"
       - "${CLASH_API_PORT:-9090}:${CLASH_API_PORT:-9090}"
       - "${MIXED_PORT:-7890}:${MIXED_PORT:-7890}"
-      - "${FLARESOLVERR_PORT:-8191}:${FLARESOLVERR_PORT:-8191}"     # FlareSolverr HTTP port
     volumes:
       - zenfreeapi_data:/data/zenfreeapi
       - mimo_data:/data/mimo
@@ -52,8 +48,9 @@ services:
   # ai-gateway's own services (several of which launch Chromium) for the
   # same memory budget. It is NOT built from source here; it uses the
   # official published image directly. Six ai-gateway services (mimo, zai,
-  # kimi, deepseek, grok2api, qwen2api) are reachable from this container at
-  # http://ai-gateway:<port>/v1 on the shared compose network -- add each one
+  # kimi, deepseek, grok2api, qwenproxy) are reachable from this container at
+  # http://ai-gateway:<port>/v1 (or direct container name for external services)
+  # on the shared compose network -- add each one
   # manually from the OmniRoute dashboard (Providers -> Add Provider ->
   # Custom Provider); see README.md "OmniRoute" section for exact base URLs,
   # keys, and which of the OpenAI-compatible / Anthropic-compatible add-paths
@@ -80,15 +77,66 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+  # qwenproxy runs in its own container (https://github.com/johngbl/qwenproxy.git)
+  # separate from ai-gateway because of Playwright/Chromium requirements.
+  # Outbound requests can proxy through ai-gateway's sing-box proxy port (2006),
+  # and ai-gateway reverse-proxies /qwenproxy to http://qwenproxy:7936.
+  qwenproxy:
+    build:
+      context: ${QWENPROXY_REPO:-https://github.com/johngbl/qwenproxy.git#main}
+    image: qwenproxy:local
+    container_name: qwenproxy
+    restart: unless-stopped
+    depends_on:
+      - ai-gateway
+    env_file:
+      - .env
+    environment:
+      - PORT=7936
+      - PROXY_API_KEY=${QWENPROXY_API_KEY:-}
+      - HTTP_PROXY=http://ai-gateway:${QWENPROXY_PROXY_PORT:-2006}
+      - HTTPS_PROXY=http://ai-gateway:${QWENPROXY_PROXY_PORT:-2006}
+      - ALL_PROXY=http://ai-gateway:${QWENPROXY_PROXY_PORT:-2006}
+    ports:
+      - "${QWENPROXY_PORT:-7936}:7936"
+    volumes:
+      - qwenproxy_data:/app/data
+
+  # FlareSolverr runs as an external service container (rorqualx/flaresolverr-go:latest).
+  # It routes its outbound requests through ai-gateway's sing-box proxy port (8190),
+  # and ai-gateway reverse-proxies /flaresolverr to http://flaresolverr:8191.
+  flaresolverr:
+    image: ${FLARESOLVERR_IMAGE:-rorqualx/flaresolverr-go:latest}
+    container_name: flaresolverr
+    restart: unless-stopped
+    depends_on:
+      - ai-gateway
+    env_file:
+      - .env
+    environment:
+      - PORT=8191
+      - PROXY_URL=http://ai-gateway:${FLARESOLVERR_PROXY_PORT:-8190}
+      - LOG_LEVEL=${FLARESOLVERR_LOG_LEVEL:-info}
+      - LOG_HTML=${FLARESOLVERR_LOG_HTML:-false}
+      - HEADLESS=${FLARESOLVERR_HEADLESS:-true}
+      - BROWSER_POOL_SIZE=${FLARESOLVERR_BROWSER_POOL_SIZE:-1}
+      - BROWSER_POOL_TIMEOUT=${FLARESOLVERR_BROWSER_POOL_TIMEOUT:-30s}
+      - MAX_MEMORY_MB=${FLARESOLVERR_MAX_MEMORY_MB:-1024}
+      - SESSION_TTL=${FLARESOLVERR_SESSION_TTL:-30m}
+      - SESSION_CLEANUP_INTERVAL=${FLARESOLVERR_SESSION_CLEANUP_INTERVAL:-1m}
+      - MAX_SESSIONS=${FLARESOLVERR_MAX_SESSIONS:-100}
+      - DEFAULT_TIMEOUT=${FLARESOLVERR_DEFAULT_TIMEOUT:-60s}
+      - MAX_TIMEOUT=${FLARESOLVERR_MAX_TIMEOUT:-300s}
+      - RATE_LIMIT_ENABLED=${FLARESOLVERR_RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_RPM=${FLARESOLVERR_RATE_LIMIT_RPM:-60}
+    ports:
+      - "${FLARESOLVERR_PORT:-8191}:8191"
 
 volumes:
   zenfreeapi_data:
   mimo_data:
   zai_data:
   grok2api_data:
-  qwen2api_data:
   singbox_data:
-  singbox_data:
-  flaresolverr_config:
   omniroute_data:
+  qwenproxy_data:
