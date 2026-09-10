@@ -2179,7 +2179,7 @@ const htmlContent = `<!DOCTYPE html>
     box.appendChild(hint);
 
     var grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:minmax(140px,.6fr) minmax(170px,.7fr) minmax(220px,1.4fr) minmax(170px,1fr);gap:8px;align-items:end;';
+    grid.style.cssText = 'display:grid;grid-template-columns:minmax(130px,.6fr) minmax(110px,.5fr) minmax(160px,.7fr) minmax(210px,1.2fr) minmax(140px,.8fr);gap:8px;align-items:end;';
 
     function field(labelText, inputEl){
       var wrap = document.createElement('div');
@@ -2192,6 +2192,11 @@ const htmlContent = `<!DOCTYPE html>
 
     var nameInput = document.createElement('input');
     nameInput.value = (link && link.display_name) || svc.name;
+
+    var prefixInput = document.createElement('input');
+    prefixInput.className = 'mono';
+    prefixInput.value = (link && link.prefix) || ('gw-' + svc.name);
+    prefixInput.placeholder = 'e.g. gw-' + svc.name;
 
     var typeSelect = document.createElement('select');
     [['openai-compatible', 'OpenAI-compatible'], ['anthropic-compatible', 'Anthropic-compatible']].forEach(function(pair){
@@ -2215,6 +2220,7 @@ const htmlContent = `<!DOCTYPE html>
     }
 
     grid.appendChild(field('Name in OmniRoute', nameInput));
+    grid.appendChild(field('Prefix', prefixInput));
     grid.appendChild(field('Type', typeSelect));
     grid.appendChild(field('Base URL', urlInput));
     grid.appendChild(field('API key', keyInput));
@@ -2245,6 +2251,7 @@ const htmlContent = `<!DOCTYPE html>
       request('/api/omniroute/save_link', {
         service_name: svc.name,
         display_name: nameInput.value.trim(),
+        prefix: prefixInput.value.trim(),
         type: typeSelect.value,
         base_url: urlInput.value.trim(),
         api_key: keyInput.value
@@ -4828,6 +4835,7 @@ type OmniRouteLink struct {
 	BaseURL      string `json:"base_url"`
 	NodeID       string `json:"node_id"`
 	ConnectionID string `json:"connection_id"`
+	Prefix       string `json:"prefix,omitempty"`
 	LinkedAt     string `json:"linked_at,omitempty"`
 }
 
@@ -7798,6 +7806,23 @@ func omniRouteErrorMessage(resp map[string]interface{}, fallback string) string 
 			return e
 		}
 	case map[string]interface{}:
+		var detailParts []string
+		if details, ok := e["details"].([]interface{}); ok {
+			for _, d := range details {
+				if dm, ok := d.(map[string]interface{}); ok {
+					f, _ := dm["field"].(string)
+					m, _ := dm["message"].(string)
+					if f != "" && m != "" {
+						detailParts = append(detailParts, fmt.Sprintf("%s: %s", f, m))
+					} else if m != "" {
+						detailParts = append(detailParts, m)
+					}
+				}
+			}
+		}
+		if len(detailParts) > 0 {
+			return strings.Join(detailParts, "; ")
+		}
 		if msg, ok := e["message"].(string); ok && msg != "" {
 			return msg
 		}
@@ -7934,6 +7959,7 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 		Type        string `json:"type"`
 		BaseURL     string `json:"base_url"`
 		APIKey      string `json:"api_key"`
+		Prefix      string `json:"prefix,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})
@@ -7943,6 +7969,7 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	req.BaseURL = strings.TrimSpace(req.BaseURL)
 	req.APIKey = strings.TrimSpace(req.APIKey)
+	req.Prefix = strings.TrimSpace(req.Prefix)
 
 	if req.ServiceName == "" || req.DisplayName == "" || req.BaseURL == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "service_name, display_name and base_url are required"})
@@ -7962,11 +7989,20 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	existing, hadExisting := state.OmniRouteLinks[req.ServiceName]
 
+	prefix := req.Prefix
+	if prefix == "" {
+		if hadExisting && existing.Prefix != "" {
+			prefix = existing.Prefix
+		} else {
+			prefix = "gw-" + req.ServiceName
+		}
+	}
+
 	// Same type as before -> update the existing node + connection in place.
 	if hadExisting && existing.Type == req.Type && existing.NodeID != "" {
 		nodeBody := map[string]interface{}{
 			"name":    req.DisplayName,
-			"prefix":  req.ServiceName,
+			"prefix":  prefix,
 			"baseUrl": req.BaseURL,
 		}
 		if req.Type == "openai-compatible" {
@@ -7997,6 +8033,7 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.DisplayName = req.DisplayName
 		existing.BaseURL = req.BaseURL
+		existing.Prefix = prefix
 		existing.LinkedAt = time.Now().UTC().Format(time.RFC3339)
 		state.OmniRouteLinks[req.ServiceName] = existing
 		if err := writeState(state); err != nil {
@@ -8020,7 +8057,7 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 
 	nodeBody := map[string]interface{}{
 		"name":    req.DisplayName,
-		"prefix":  req.ServiceName,
+		"prefix":  prefix,
 		"baseUrl": req.BaseURL,
 		"type":    req.Type,
 	}
@@ -8067,6 +8104,7 @@ func omniRouteSaveLinkHandler(w http.ResponseWriter, r *http.Request) {
 		BaseURL:      req.BaseURL,
 		NodeID:       nodeID,
 		ConnectionID: connID,
+		Prefix:       prefix,
 		LinkedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := writeState(state); err != nil {
