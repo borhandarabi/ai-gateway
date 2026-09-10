@@ -4632,16 +4632,16 @@ func heuristicSecretField(envKey string) bool {
 //   - mimo        : github.com/hooshidev3/mimo-ai-proxy       (os.Getenv)
 //   - zai         : github.com/izaart95-jpg/GLM-Free-API      (main.go loadConfig)
 //   - kimi        : github.com/izaart95-jpg/KimiFreeAPI       (main.go envOrDefault)
-//   - deepseek    : github.com/izaart95-jpg/DeepSeekFreeAPI   (main.go envOr)
+//   - deepseek    : github.com/indicatorspro/DeepSeekFreeAPI   (main.go envOr)
 //   - grok2api    : config.yaml generated in its s6 run script (server/auth sections)
 var serviceDefaultEnvs = map[string]map[string]string{
 	"zenfreeapi": {
-		"OPENCODE_ZEN_BASE":	"https://opencode.ai/zen/v1",
-		"OPENCODE_API_KEY":  	"public",
-		"OPENCODE_CLIENT":   	"cli",
-		"OPENCODE_USER_AGENT":  "opencode/0.0.0",
-		"ZENFREEAPI_PORT":   	"3008",
-		"ZEN_STATE_DIR":   		"/data/zenfreeapi",
+		"OPENCODE_ZEN_BASE":   "https://opencode.ai/zen/v1",
+		"OPENCODE_API_KEY":    "public",
+		"OPENCODE_CLIENT":     "cli",
+		"OPENCODE_USER_AGENT": "opencode/0.0.0",
+		"ZENFREEAPI_PORT":     "3008",
+		"ZEN_STATE_DIR":       "/data/zenfreeapi",
 	},
 	"mimo": {
 		"CORS_ORIGIN":        "*",
@@ -4651,19 +4651,19 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"XIAOMI_CHATBOT_PHS": "", // comma-separated Xiaomi chatbot PH cookies
 	},
 	"zai": {
-		"ZAI_TOKEN":   					"", // Hardcoded Z.AI JWT — skips guest initialization
-		"ZAI_AUTH_TOKEN":   			"Waguri", // upstream AUTH_TOKEN default
-		"ZAI_TIMEOUT":      			"300000", // ms, upstream TIMEOUT default
-		"ZAI_AGENT_MODE":   			"true",
-		"ZAI_AGENT_MODE_VARIANT":   	"modern", // Shim variant override (modern/legacy; takes precedence over AGENT_MODE's implicit variant)
-		"ZAI_LOG_LEVEL":    			"info", // upstream default is debug; image runs info
-		"ZAI_LOG_FORMAT":   			"text",
+		"ZAI_TOKEN":                    "",       // Hardcoded Z.AI JWT — skips guest initialization
+		"ZAI_AUTH_TOKEN":               "Waguri", // upstream AUTH_TOKEN default
+		"ZAI_TIMEOUT":                  "300000", // ms, upstream TIMEOUT default
+		"ZAI_AGENT_MODE":               "true",
+		"ZAI_AGENT_MODE_VARIANT":       "modern", // Shim variant override (modern/legacy; takes precedence over AGENT_MODE's implicit variant)
+		"ZAI_LOG_LEVEL":                "info",   // upstream default is debug; image runs info
+		"ZAI_LOG_FORMAT":               "text",
 		"ZAI_UPSTREAM_MIN_INTERVAL_MS": "200",
 		"ZAI_SESSION_ACQUIRE_TIMEOUT":  "10",
-		"ZAI_SESSION_POOL_SIZE":   		"5", // Standing batch of ready chat sessions
-		"ZAI_SYNC_MODE":   				"false", // Legacy synchronous session flow (no pre-warmed pool)
-		"ZAI_STREAM_HOLDBACK":   		"24", // Runes held back at a live stream's tail to absorb Z.AI edit_content backtracks before they reach the client (0 disables; issue #23)
-		"ZAI_AUTO_COLLECT": 			"false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
+		"ZAI_SESSION_POOL_SIZE":        "5",     // Standing batch of ready chat sessions
+		"ZAI_SYNC_MODE":                "false", // Legacy synchronous session flow (no pre-warmed pool)
+		"ZAI_STREAM_HOLDBACK":          "24",    // Runes held back at a live stream's tail to absorb Z.AI edit_content backtracks before they reach the client (0 disables; issue #23)
+		"ZAI_AUTO_COLLECT":             "false", // first-boot Chromium token collection gate (see s6-rc.d/zai/run)
 	},
 	"kimi": {
 		"KIMI_ACCESS_TOKEN": "",       // empty = service stays down/idle until a real token is set
@@ -4673,11 +4673,11 @@ var serviceDefaultEnvs = map[string]map[string]string{
 		"KIMI_REGION":       "global",
 	},
 	"deepseek": {
-		"DEEPSEEK_TOKEN": 					"",           // required for the proxy to serve requests
-		"DEEPSEEK_PROXY_API_KEY":  			"Waguri", // upstream default client key
-		"DEEPSEEK_AGENT_MODE":  			"true",
-		"DEEPSEEK_SYNC_MODE":  				"false",
-		"DEEPSEEK_SESSION_POOL_SIZE":  		"5",
+		"DEEPSEEK_TOKEN":                   "",       // required for the proxy to serve requests
+		"DEEPSEEK_PROXY_API_KEY":           "Waguri", // upstream default client key
+		"DEEPSEEK_AGENT_MODE":              "true",
+		"DEEPSEEK_SYNC_MODE":               "false",
+		"DEEPSEEK_SESSION_POOL_SIZE":       "5",
 		"DEEPSEEK_SESSION_ACQUIRE_TIMEOUT": "10",
 	},
 	"grok2api": {
@@ -7876,15 +7876,15 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// into a request storm against OmniRoute.
 	reachable, probeReason := probeOmniRoute()
 	jsonResponse(w, http.StatusOK, map[string]interface{}{
-		"configured":        getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
-		"available":         reachable,
+		"configured":         getSetting("OMNIROUTE_MANAGEMENT_API_KEY", "") != "",
+		"available":          reachable,
 		"unavailable_reason": probeReason,
-		"base_url":          getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
-		"internal_base_url": getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
-		"links":             links,
-		"suggested_keys":    suggestedKeys,
-		"preferred_types":   preferredTypes,
-		"known_ai_services": knownAIServiceNames(),
+		"base_url":           getSetting("OMNIROUTE_BASE_URL", "http://omniroute:20128"),
+		"internal_base_url":  getSetting("AI_GATEWAY_INTERNAL_BASE_URL", "http://ai-gateway"),
+		"links":              links,
+		"suggested_keys":     suggestedKeys,
+		"preferred_types":    preferredTypes,
+		"known_ai_services":  knownAIServiceNames(),
 	})
 }
 
@@ -7892,10 +7892,10 @@ func omniRouteStatusHandler(w http.ResponseWriter, r *http.Request) {
 // services هر چند ثانیه دوباره رندر می‌شود و بدون کش، هر رندر یک درخواست
 // واقعی به OmniRoute می‌فرستاد.
 var (
-	omniRouteProbeMu       sync.Mutex
-	omniRouteProbeOK       bool
-	omniRouteProbeReason   string
-	omniRouteProbeAt       time.Time
+	omniRouteProbeMu     sync.Mutex
+	omniRouteProbeOK     bool
+	omniRouteProbeReason string
+	omniRouteProbeAt     time.Time
 )
 
 func probeOmniRoute() (bool, string) {
@@ -8375,13 +8375,13 @@ func deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 // تگ selector مرتبط، و ارجاع‌های route rule را هماهنگ به‌روزرسانی می‌کند.
 func editServiceHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		OldName              string            `json:"old_name"`
-		NewName              string            `json:"new_name"`
-		NewHost              string            `json:"new_host,omitempty"`
-		NewListenPort        int               `json:"new_listen_port"`
-		NewProxyPort         int               `json:"new_proxy_port,omitempty"`
-		PreferredOmniRoute   string            `json:"preferred_omniroute_type,omitempty"`
-		Env                  map[string]string `json:"env,omitempty"`
+		OldName            string            `json:"old_name"`
+		NewName            string            `json:"new_name"`
+		NewHost            string            `json:"new_host,omitempty"`
+		NewListenPort      int               `json:"new_listen_port"`
+		NewProxyPort       int               `json:"new_proxy_port,omitempty"`
+		PreferredOmniRoute string            `json:"preferred_omniroute_type,omitempty"`
+		Env                map[string]string `json:"env,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonResponse(w, http.StatusBadRequest, map[string]interface{}{"error": "Invalid JSON"})

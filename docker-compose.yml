@@ -8,7 +8,7 @@ services:
         grok2api_src: ${GROK2API_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         zai_src: ${ZAI_REPO:-https://github.com/izaart95-jpg/GLM-Free-API.git#main}
         kimi_src: ${KIMI_REPO:-https://github.com/izaart95-jpg/KimiFreeAPI.git#main}
-        deepseek_src: ${DEEPSEEK_REPO:-https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main}
+        deepseek_src: ${DEEPSEEK_REPO:-https://github.com/indicatorspro/DeepSeekFreeAPI.git#main}
         zenfreeapi_src: ${ZENFREEAPI_REPO:-https://github.com/izaart95-jpg/ZenFreeAPI.git#main}
     image: ai-gateway:local
     container_name: ai-gateway

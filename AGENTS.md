@@ -130,7 +130,7 @@ Repo: https://github.com/izaart95-jpg/KimiFreeAPI.git#main (envOrDefault in main
 | PORT | 3000 | derived from KIMI_PORT |
 
 ### 4.5 deepseek (Go)
-Repo: https://github.com/izaart95-jpg/DeepSeekFreeAPI.git#main (envOr in main.go:25)
+Repo: https://github.com/indicatorspro/DeepSeekFreeAPI.git#main (envOr in main.go:25)
 | Upstream key | Default | Notes |
 |---|---|---|
 | ⭐ PROXY_API_KEY | **Waguri-san** | client key of the proxy |
@@ -206,7 +206,7 @@ Runs as a separate container/service (`flaresolverr`) outside the main ai-gatewa
 ```bash
 cd "$LOCALAPPDATA/Temp/upstream"
 for r in hooshidev3/mimo-ai-proxy izaart95-jpg/GLM-Free-API izaart95-jpg/KimiFreeAPI \
-         izaart95-jpg/DeepSeekFreeAPI Rorqualx/flaresolverr-go \
+         indicatorspro/DeepSeekFreeAPI Rorqualx/flaresolverr-go \
          izaart95-jpg/ZenFreeAPI johngbl/qwenproxy; do git clone -q --depth 1 "https://github.com/$r.git"; done
 # env extraction shortcut (Go services):
 grep -rhoE 'os\.(Getenv|LookupEnv)\("[A-Z0-9_]+"\)' <dir> --include='*.go' | sort -u
